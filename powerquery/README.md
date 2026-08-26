@@ -15,12 +15,24 @@ re-run the script rather than hand-editing the generated query lines.
   drifted in the one confirmed case (Sport and Exercise Science, sheet
   `4101SPS`, which stored `SPS4101`). Since that's now fixed at source,
   this is just the query staying defensive against it happening again.
-- **Shared modules need no ownership list.** `SourceTables` pools every
-  table from all 6 workbooks before anything is filtered by programme, so
-  a module physically stored in one workbook (e.g. `4093SPS`, which only
-  exists in the Sport Psychology file) still surfaces correctly for every
-  other programme whose register entry names it. Nothing tracks which
-  workbook "owns" a module — the join finds it wherever it actually is.
+- **Shared modules need no ownership list — but a code can collide.**
+  `SourceTables` pools every table from all 6 workbooks before anything is
+  filtered by programme, so a module physically stored in one workbook
+  (e.g. `4093SPS`, which only exists in the Sport Psychology file) still
+  surfaces correctly for every other programme whose register entry names
+  it. But one verified case is not sharing at all: **`4202SPS`** exists as
+  two unrelated modules in two different workbooks — Physical Education's
+  "Learning in PE and Sport Contexts" and Sport Coaching's "Learning
+  Theory and Practice 1". A join on code alone would hand each programme
+  a duplicate row, one of them the wrong module entirely. `fnItemTable`
+  resolves this by preferring, for each (Programme, ModuleCode), the
+  table from that programme's *own* workbook when one exists there, and
+  only falling back to another workbook when it doesn't (the genuine
+  sharing case). Checked school-wide: after this fix, zero
+  (Programme, ModuleCode) pairs resolve to more than one table. The
+  underlying code collision is still worth reporting to whoever manages
+  the module catalogue — this masks it at the query layer, it doesn't
+  fix the source data.
 - **The register stays exactly as it is.** `Modules by programme.xlsx` is
   read as its current 6-block layout — no conversion to a formal Excel
   Table. Module rows are recognised by their code ending in `SPS`, not by
