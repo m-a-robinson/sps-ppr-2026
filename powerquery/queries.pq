@@ -27,6 +27,15 @@ section Section1;
 //   - Sport Coaching's 4 provisional codes (5XX1SPS, 5XX2SPS, 6XX1SPS,
 //     6XX2SPS) are treated as ordinary module codes, per instruction —
 //     no special-case filtering for "TBC" status.
+//   - A module code can exist in more than one workbook for two different
+//     reasons: genuine sharing (the code exists in exactly one workbook;
+//     several programmes list it) or a code collision (the SAME code
+//     exists in two workbooks as two unrelated modules — verified case:
+//     4202SPS is both PE's "Learning in PE and Sport Contexts" and Sport
+//     Coaching's "Learning Theory and Practice 1"). fnItemTable resolves
+//     this by preferring, for each (Programme, ModuleCode), the table
+//     from that programme's own workbook when one exists there, and only
+//     falling back to another workbook when it doesn't — see step 4.
 //   - Meta/Hours (key-value) and Aims/Syllabus/Overview/Notes (single-
 //     column free text) are deliberately left in their raw per-record
 //     shape here. Pivoting Meta/Hours into one row per module, and
@@ -132,13 +141,20 @@ shared SourceTablesParsed =
 // programme-name header row, blank rows, and the SharePoint-folder
 // footer row without needing to know which row number they're on.
 
+// Excel.Workbook(..., false) numbers generic columns from the sheet's USED
+// RANGE, not from absolute column A. This sheet's used range is B4:AI40
+// (column A is entirely blank), so Column1 = worksheet column B, Column2 =
+// C, and so on — every absolute column letter maps to "its own position
+// minus 1" here (worksheet AI, the last used column, is Column34, not
+// Column35). Verified against a live "Column35 not found" error — if this
+// register's layout ever changes, so does this offset.
 shared RegisterBlocks = {
-    [Programme = "Football Science",           ProgCode = "FS",    CodeCol = "Column2",  TitleCol = "Column3"],
-    [Programme = "Physical Education",         ProgCode = "PE",    CodeCol = "Column8",  TitleCol = "Column9"],
-    [Programme = "Sport and Exercise Science", ProgCode = "SES",   CodeCol = "Column14", TitleCol = "Column15"],
-    [Programme = "Sport Coaching",              ProgCode = "COACH", CodeCol = "Column21", TitleCol = "Column22"],
-    [Programme = "Sport Nutrition",             ProgCode = "NUTR",  CodeCol = "Column28", TitleCol = "Column29"],
-    [Programme = "Sport Psychology",            ProgCode = "PSYC",  CodeCol = "Column34", TitleCol = "Column35"]
+    [Programme = "Football Science",           ProgCode = "FS",    CodeCol = "Column1",  TitleCol = "Column2"],
+    [Programme = "Physical Education",         ProgCode = "PE",    CodeCol = "Column7",  TitleCol = "Column8"],
+    [Programme = "Sport and Exercise Science", ProgCode = "SES",   CodeCol = "Column13", TitleCol = "Column14"],
+    [Programme = "Sport Coaching",              ProgCode = "COACH", CodeCol = "Column20", TitleCol = "Column21"],
+    [Programme = "Sport Nutrition",             ProgCode = "NUTR",  CodeCol = "Column27", TitleCol = "Column28"],
+    [Programme = "Sport Psychology",            ProgCode = "PSYC",  CodeCol = "Column33", TitleCol = "Column34"]
 };
 
 shared ModuleRegister =
@@ -187,6 +203,16 @@ shared ModuleRegister =
 // every programme that claims it, sourced from wherever it actually
 // lives — which is the "single home, several users" principle in
 // practice, not as a rule that has to be separately enforced.
+//
+// Step 4 handles the other case: a module code that exists in MORE THAN
+// ONE workbook. Since workbooks are named "<Programme> - AllModuleProformas",
+// a Programme's own workbook is recognisable directly from SourceWorkbook.
+// For each (Programme, ModuleCode), prefer the row(s) from that
+// programme's own workbook when any exist there; only keep rows from
+// elsewhere when the programme's own workbook has none for that code.
+// This resolves the verified 4202SPS collision (PE and Sport Coaching
+// each get their own module back, not each other's) while still letting
+// genuinely shared codes (4093SPS, 6091SPS, ...) fall back correctly.
 
 shared fnItemTable = (programmeFilter as nullable text, itemSuffix as text) as table =>
     let
@@ -194,20 +220,34 @@ shared fnItemTable = (programmeFilter as nullable text, itemSuffix as text) as t
         Joined = Table.NestedJoin(FilteredByItem, {"ModuleCode"}, ModuleRegister, {"ModuleCode"}, "Register", JoinKind.Inner),
         ExpandedRegister = Table.ExpandTableColumn(Joined, "Register", {"Programme", "ProgCode", "ModuleTitle"}, {"Programme", "ProgCode", "ModuleTitle"}),
         FilteredByProgramme = if programmeFilter = null then ExpandedRegister else Table.SelectRows(ExpandedRegister, each [Programme] = programmeFilter),
+
+        // Resolve (Programme, ModuleCode) pairs matched to more than one
+        // physical table: prefer the programme's own workbook.
+        Grouped = Table.Group(FilteredByProgramme, {"Programme", "ModuleCode"}, {{"Rows", each _, type table}}),
+        Resolved = Table.AddColumn(Grouped, "Chosen", (g) =>
+            let
+                Candidates = g[Rows],
+                OwnProgramme = g[Programme],
+                OwnWorkbook = Table.SelectRows(Candidates, each Text.StartsWith([SourceWorkbook], OwnProgramme))
+            in
+                if Table.RowCount(OwnWorkbook) > 0 then OwnWorkbook else Candidates
+        ),
+        Recombined = Table.Combine(Resolved[Chosen]),
+
         // Union of column names across every matched module's table, not just
         // the first one — one Football Science "_Notes" table (6304SPS) has a
         // stray extra column versus the other 77, and this keeps that from
         // silently dropping columns or erroring depending on row order.
         AllColumnNames =
-            if Table.IsEmpty(FilteredByProgramme) then
+            if Table.IsEmpty(Recombined) then
                 {}
             else
-                List.Distinct(List.Combine(List.Transform(FilteredByProgramme[TableData], each Table.ColumnNames(_)))),
+                List.Distinct(List.Combine(List.Transform(Recombined[TableData], each Table.ColumnNames(_)))),
         ExpandedContent =
-            if Table.IsEmpty(FilteredByProgramme) then
-                FilteredByProgramme
+            if Table.IsEmpty(Recombined) then
+                Recombined
             else
-                Table.ExpandTableColumn(FilteredByProgramme, "TableData", AllColumnNames)
+                Table.ExpandTableColumn(Recombined, "TableData", AllColumnNames)
     in
         ExpandedContent;
 
