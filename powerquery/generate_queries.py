@@ -165,13 +165,20 @@ shared SourceTablesParsed =
 // programme-name header row, blank rows, and the SharePoint-folder
 // footer row without needing to know which row number they're on.
 
+// Excel.Workbook(..., false) numbers generic columns from the sheet's USED
+// RANGE, not from absolute column A. This sheet's used range is B4:AI40
+// (column A is entirely blank), so Column1 = worksheet column B, Column2 =
+// C, and so on — every absolute column letter maps to "its own position
+// minus 1" here (worksheet AI, the last used column, is Column34, not
+// Column35). Verified against a live "Column35 not found" error — if this
+// register's layout ever changes, so does this offset.
 shared RegisterBlocks = {
-    [Programme = "Football Science",           ProgCode = "FS",    CodeCol = "Column2",  TitleCol = "Column3"],
-    [Programme = "Physical Education",         ProgCode = "PE",    CodeCol = "Column8",  TitleCol = "Column9"],
-    [Programme = "Sport and Exercise Science", ProgCode = "SES",   CodeCol = "Column14", TitleCol = "Column15"],
-    [Programme = "Sport Coaching",              ProgCode = "COACH", CodeCol = "Column21", TitleCol = "Column22"],
-    [Programme = "Sport Nutrition",             ProgCode = "NUTR",  CodeCol = "Column28", TitleCol = "Column29"],
-    [Programme = "Sport Psychology",            ProgCode = "PSYC",  CodeCol = "Column34", TitleCol = "Column35"]
+    [Programme = "Football Science",           ProgCode = "FS",    CodeCol = "Column1",  TitleCol = "Column2"],
+    [Programme = "Physical Education",         ProgCode = "PE",    CodeCol = "Column7",  TitleCol = "Column8"],
+    [Programme = "Sport and Exercise Science", ProgCode = "SES",   CodeCol = "Column13", TitleCol = "Column14"],
+    [Programme = "Sport Coaching",              ProgCode = "COACH", CodeCol = "Column20", TitleCol = "Column21"],
+    [Programme = "Sport Nutrition",             ProgCode = "NUTR",  CodeCol = "Column27", TitleCol = "Column28"],
+    [Programme = "Sport Psychology",            ProgCode = "PSYC",  CodeCol = "Column33", TitleCol = "Column34"]
 };
 
 shared ModuleRegister =
