@@ -254,9 +254,22 @@ shared fnItemTable = (programmeFilter as nullable text, itemSuffix as text) as t
             if Table.IsEmpty(Recombined) then
                 Recombined
             else
-                Table.ExpandTableColumn(Recombined, "TableData", AllColumnNames)
+                Table.ExpandTableColumn(Recombined, "TableData", AllColumnNames),
+
+        // Source tables have fixed-capacity rows that aren't always fully
+        // used (e.g. an _Assess table has 4 assessment slots, often only
+        // 1-3 filled in) — drop a row only when every one of the item's
+        // own columns is blank, so an unused slot disappears without
+        // hardcoding a column name specific to any one item type.
+        FilteredBlankRows =
+            if Table.IsEmpty(ExpandedContent) or List.IsEmpty(AllColumnNames) then
+                ExpandedContent
+            else
+                Table.SelectRows(ExpandedContent, (row) =>
+                    List.AnyTrue(List.Transform(AllColumnNames, (col) => Record.Field(row, col) <> null))
+                )
     in
-        ExpandedContent;
+        FilteredBlankRows;
 
 // ---------------------------------------------------------------------
 // 5. GENERATED QUERIES — one per (programme x item), plus school-wide
