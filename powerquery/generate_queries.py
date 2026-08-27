@@ -92,6 +92,13 @@ shared GetWorkbookFiles =
         LocalWorkbooks = Table.SelectRows(LocalSource, each
             Text.Contains([Name], "AllModuleProformas")
             and (Text.EndsWith([Name], ".xlsx") or Text.EndsWith([Name], ".xlsm"))
+            // Exclude Excel's own lock file for whichever workbook is currently
+            // open (~$Football Science - AllModuleProformas.xlsx) and macOS's
+            // AppleDouble sidecar files (._Football Science - ...) — both match
+            // the filters above but aren't real workbooks, and Excel.Workbook()
+            // on either throws "File contains corrupted data".
+            and not Text.StartsWith([Name], "~$")
+            and not Text.StartsWith([Name], ".")
         ),
 
         SharePointAllFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
