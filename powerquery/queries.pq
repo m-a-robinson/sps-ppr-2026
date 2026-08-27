@@ -36,12 +36,15 @@ section Section1;
 //     this by preferring, for each (Programme, ModuleCode), the table
 //     from that programme's own workbook when one exists there, and only
 //     falling back to another workbook when it doesn't — see step 4.
-//   - Meta/Hours (key-value) and Aims/Syllabus/Overview/Notes (single-
-//     column free text) are deliberately left in their raw per-record
-//     shape here. Pivoting Meta/Hours into one row per module, and
-//     combining the free-text items into one block per module, is a
-//     Phase 3 (DASHBOARD view) concern layered on top of these queries
-//     — not done here, so these stay simple, provable building blocks.
+//   - Meta/Hours (key-value) are deliberately left in their raw per-record
+//     shape here. Pivoting them into one row per module is a Phase 3
+//     (DASHBOARD view) concern layered on top of these queries — not
+//     done here, so these stay simple, provable building blocks.
+//   - Only Meta, LO, Assess, Hours and Mapping are generated below — the
+//     5 items relevant to assessment/LO/hours mapping. Weekly, Aims,
+//     Syllabus, Overview and Notes are narrative/descriptive content, not
+//     mapping data, so no queries are generated for them (fnItemTable
+//     still supports any item suffix if that changes).
 
 // ---------------------------------------------------------------------
 // 1. SETTINGS — edit these two lines for your machine, nothing else
@@ -281,83 +284,48 @@ shared fnItemTable = (programmeFilter as nullable text, itemSuffix as text) as t
 shared FS_Meta = fnItemTable("Football Science", "Meta");
 shared FS_LO = fnItemTable("Football Science", "LO");
 shared FS_Assess = fnItemTable("Football Science", "Assess");
-shared FS_Weekly = fnItemTable("Football Science", "Weekly");
 shared FS_Hours = fnItemTable("Football Science", "Hours");
 shared FS_Mapping = fnItemTable("Football Science", "Mapping");
-shared FS_Aims = fnItemTable("Football Science", "Aims");
-shared FS_Syllabus = fnItemTable("Football Science", "Syllabus");
-shared FS_Overview = fnItemTable("Football Science", "Overview");
-shared FS_Notes = fnItemTable("Football Science", "Notes");
 
 // Physical Education
 shared PE_Meta = fnItemTable("Physical Education", "Meta");
 shared PE_LO = fnItemTable("Physical Education", "LO");
 shared PE_Assess = fnItemTable("Physical Education", "Assess");
-shared PE_Weekly = fnItemTable("Physical Education", "Weekly");
 shared PE_Hours = fnItemTable("Physical Education", "Hours");
 shared PE_Mapping = fnItemTable("Physical Education", "Mapping");
-shared PE_Aims = fnItemTable("Physical Education", "Aims");
-shared PE_Syllabus = fnItemTable("Physical Education", "Syllabus");
-shared PE_Overview = fnItemTable("Physical Education", "Overview");
-shared PE_Notes = fnItemTable("Physical Education", "Notes");
 
 // Sport and Exercise Science
 shared SES_Meta = fnItemTable("Sport and Exercise Science", "Meta");
 shared SES_LO = fnItemTable("Sport and Exercise Science", "LO");
 shared SES_Assess = fnItemTable("Sport and Exercise Science", "Assess");
-shared SES_Weekly = fnItemTable("Sport and Exercise Science", "Weekly");
 shared SES_Hours = fnItemTable("Sport and Exercise Science", "Hours");
 shared SES_Mapping = fnItemTable("Sport and Exercise Science", "Mapping");
-shared SES_Aims = fnItemTable("Sport and Exercise Science", "Aims");
-shared SES_Syllabus = fnItemTable("Sport and Exercise Science", "Syllabus");
-shared SES_Overview = fnItemTable("Sport and Exercise Science", "Overview");
-shared SES_Notes = fnItemTable("Sport and Exercise Science", "Notes");
 
 // Sport Coaching
 shared COACH_Meta = fnItemTable("Sport Coaching", "Meta");
 shared COACH_LO = fnItemTable("Sport Coaching", "LO");
 shared COACH_Assess = fnItemTable("Sport Coaching", "Assess");
-shared COACH_Weekly = fnItemTable("Sport Coaching", "Weekly");
 shared COACH_Hours = fnItemTable("Sport Coaching", "Hours");
 shared COACH_Mapping = fnItemTable("Sport Coaching", "Mapping");
-shared COACH_Aims = fnItemTable("Sport Coaching", "Aims");
-shared COACH_Syllabus = fnItemTable("Sport Coaching", "Syllabus");
-shared COACH_Overview = fnItemTable("Sport Coaching", "Overview");
-shared COACH_Notes = fnItemTable("Sport Coaching", "Notes");
 
 // Sport Nutrition
 shared NUTR_Meta = fnItemTable("Sport Nutrition", "Meta");
 shared NUTR_LO = fnItemTable("Sport Nutrition", "LO");
 shared NUTR_Assess = fnItemTable("Sport Nutrition", "Assess");
-shared NUTR_Weekly = fnItemTable("Sport Nutrition", "Weekly");
 shared NUTR_Hours = fnItemTable("Sport Nutrition", "Hours");
 shared NUTR_Mapping = fnItemTable("Sport Nutrition", "Mapping");
-shared NUTR_Aims = fnItemTable("Sport Nutrition", "Aims");
-shared NUTR_Syllabus = fnItemTable("Sport Nutrition", "Syllabus");
-shared NUTR_Overview = fnItemTable("Sport Nutrition", "Overview");
-shared NUTR_Notes = fnItemTable("Sport Nutrition", "Notes");
 
 // Sport Psychology
 shared PSYC_Meta = fnItemTable("Sport Psychology", "Meta");
 shared PSYC_LO = fnItemTable("Sport Psychology", "LO");
 shared PSYC_Assess = fnItemTable("Sport Psychology", "Assess");
-shared PSYC_Weekly = fnItemTable("Sport Psychology", "Weekly");
 shared PSYC_Hours = fnItemTable("Sport Psychology", "Hours");
 shared PSYC_Mapping = fnItemTable("Sport Psychology", "Mapping");
-shared PSYC_Aims = fnItemTable("Sport Psychology", "Aims");
-shared PSYC_Syllabus = fnItemTable("Sport Psychology", "Syllabus");
-shared PSYC_Overview = fnItemTable("Sport Psychology", "Overview");
-shared PSYC_Notes = fnItemTable("Sport Psychology", "Notes");
 
 // --- school-wide (all programmes, unfiltered) ---------------------------
 
 shared All_Meta = fnItemTable(null, "Meta");
 shared All_LO = fnItemTable(null, "LO");
 shared All_Assess = fnItemTable(null, "Assess");
-shared All_Weekly = fnItemTable(null, "Weekly");
 shared All_Hours = fnItemTable(null, "Hours");
 shared All_Mapping = fnItemTable(null, "Mapping");
-shared All_Aims = fnItemTable(null, "Aims");
-shared All_Syllabus = fnItemTable(null, "Syllabus");
-shared All_Overview = fnItemTable(null, "Overview");
-shared All_Notes = fnItemTable(null, "Notes");

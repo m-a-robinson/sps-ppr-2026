@@ -19,8 +19,12 @@ PROGRAMMES = [
     ("Sport Psychology", "PSYC"),
 ]
 
-# The 10 standard "_MODULECODE_ITEM" tables found on every module sheet.
-ITEMS = ["Meta", "LO", "Assess", "Weekly", "Hours", "Mapping", "Aims", "Syllabus", "Overview", "Notes"]
+# Every module sheet has 10 standard "_MODULECODE_ITEM" tables, but only
+# these 5 are relevant to assessment/LO/hours mapping — Weekly, Aims,
+# Syllabus, Overview and Notes are narrative/descriptive content, not
+# mapping data, so no queries are generated for them. fnItemTable itself
+# still supports any item suffix; add one back here if that changes.
+ITEMS = ["Meta", "LO", "Assess", "Hours", "Mapping"]
 
 PREAMBLE = r'''section Section1;
 
@@ -60,12 +64,15 @@ PREAMBLE = r'''section Section1;
 //     this by preferring, for each (Programme, ModuleCode), the table
 //     from that programme's own workbook when one exists there, and only
 //     falling back to another workbook when it doesn't — see step 4.
-//   - Meta/Hours (key-value) and Aims/Syllabus/Overview/Notes (single-
-//     column free text) are deliberately left in their raw per-record
-//     shape here. Pivoting Meta/Hours into one row per module, and
-//     combining the free-text items into one block per module, is a
-//     Phase 3 (DASHBOARD view) concern layered on top of these queries
-//     — not done here, so these stay simple, provable building blocks.
+//   - Meta/Hours (key-value) are deliberately left in their raw per-record
+//     shape here. Pivoting them into one row per module is a Phase 3
+//     (DASHBOARD view) concern layered on top of these queries — not
+//     done here, so these stay simple, provable building blocks.
+//   - Only Meta, LO, Assess, Hours and Mapping are generated below — the
+//     5 items relevant to assessment/LO/hours mapping. Weekly, Aims,
+//     Syllabus, Overview and Notes are narrative/descriptive content, not
+//     mapping data, so no queries are generated for them (fnItemTable
+//     still supports any item suffix if that changes).
 
 // ---------------------------------------------------------------------
 // 1. SETTINGS — edit these two lines for your machine, nothing else
