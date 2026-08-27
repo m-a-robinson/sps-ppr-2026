@@ -109,6 +109,16 @@ shared GetRegisterFileContent =
 // Every named Excel Table, from every workbook, in one pooled list.
 // This — not any per-query source read — is what makes the "single
 // home, many programmes" principle work without extra bookkeeping.
+//
+// Table.Buffer here matters: SourceTables is referenced by every one of
+// the 30+ downstream queries below. Without forcing it to materialize
+// once, a refresh can re-open and re-scan all 6 workbooks once PER
+// downstream query instead of once total — the difference between a
+// multi-minute refresh and a fast one. (Also worth checking, outside
+// this file: Power Query Editor -> File -> Options and Settings ->
+// Query Options -> Privacy -> "Always ignore Privacy Level settings".
+// Mismatched privacy levels across sources force the same kind of
+// isolated per-query re-evaluation that buffering is working around.)
 shared SourceTables =
     let
         Files = GetWorkbookFiles,
@@ -116,9 +126,10 @@ shared SourceTables =
         Expanded = Table.ExpandTableColumn(AddWorkbookData, "Workbook", {"Name", "Data", "Kind"}, {"TableName", "TableData", "Kind"}),
         OnlyTables = Table.SelectRows(Expanded, each [Kind] = "Table"),
         Trimmed = Table.SelectColumns(OnlyTables, {"Name", "TableName", "TableData"}),
-        Renamed = Table.RenameColumns(Trimmed, {{"Name", "SourceWorkbook"}})
+        Renamed = Table.RenameColumns(Trimmed, {{"Name", "SourceWorkbook"}}),
+        Buffered = Table.Buffer(Renamed)
     in
-        Renamed;
+        Buffered;
 
 // "_4101SPS_Meta" (or "4101SPS_Meta") -> [ModuleCode = "4101SPS", ItemSuffix = "Meta"]
 shared fnParseTableName = (tableName as text) as record =>
@@ -130,15 +141,23 @@ shared fnParseTableName = (tableName as text) as record =>
     in
         [ModuleCode = Code, ItemSuffix = Item];
 
+// Kept in sync with ITEMS in generate_queries.py — the items actually
+// queried below. Filtering to these here (not just inside fnItemTable)
+// means SourceTablesParsed never carries the other 5 items' rows
+// (Weekly, Aims, Syllabus, Overview, Notes) through the buffer at all.
+shared RelevantItems = {"Meta", "LO", "Assess", "Hours", "Mapping"};
+
 shared SourceTablesParsed =
     let
         Source = SourceTables,
         AddParsed = Table.AddColumn(Source, "Parsed", each fnParseTableName([TableName])),
         AddModuleCode = Table.AddColumn(AddParsed, "ModuleCode", each [Parsed][ModuleCode]),
         AddItemSuffix = Table.AddColumn(AddModuleCode, "ItemSuffix", each [Parsed][ItemSuffix]),
-        Cleaned = Table.RemoveColumns(AddItemSuffix, {"Parsed"})
+        Cleaned = Table.RemoveColumns(AddItemSuffix, {"Parsed"}),
+        OnlyRelevantItems = Table.SelectRows(Cleaned, each List.Contains(RelevantItems, [ItemSuffix])),
+        Buffered = Table.Buffer(OnlyRelevantItems)
     in
-        Cleaned;
+        Buffered;
 
 // ---------------------------------------------------------------------
 // 3. MODULE REGISTER — read "Modules by programme.xlsx" as it stands
@@ -193,9 +212,10 @@ shared ModuleRegister =
                 Table.SelectColumns(AddProgCode, {"Programme", "ProgCode", "ModuleCode", "ModuleTitle"}),
 
         AllBlocks = List.Transform(RegisterBlocks, each ExtractBlock(_)),
-        Combined = Table.Combine(AllBlocks)
+        Combined = Table.Combine(AllBlocks),
+        Buffered = Table.Buffer(Combined)
     in
-        Combined;
+        Buffered;
 
 // ---------------------------------------------------------------------
 // 4. fnItemTable — every query below is just a call to this
