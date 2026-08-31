@@ -295,7 +295,25 @@ shared fnItemTable = (programmeFilter as nullable text, itemSuffix as text) as t
         FilteredBlankRows;
 
 // ---------------------------------------------------------------------
-// 5. GENERATED QUERIES — one per (programme x item), plus school-wide
+// 5. WIDE VIEWS — Meta/Hours reshaped to one row per module
+// ---------------------------------------------------------------------
+//
+// FS_Meta and FS_Hours (etc.) come out of fnItemTable long/key-value —
+// one row per (module, field), not one row per module — because that's
+// their table's actual shape, and Phase 2 deliberately doesn't reshape.
+// This is that reshape, factored out the same way fnItemTable is: one
+// function, called once per programme for each of the two key-value
+// items, rather than duplicating a pivot step 6+ times.
+
+shared fnPivotKeyValue = (baseTable as table, keyColumn as text, valueColumn as text) as table =>
+    let
+        PivotValues = List.Distinct(Table.Column(baseTable, keyColumn)),
+        Pivoted = Table.Pivot(baseTable, PivotValues, keyColumn, valueColumn, each List.First(_, null))
+    in
+        Pivoted;
+
+// ---------------------------------------------------------------------
+// 6. GENERATED QUERIES — one per (programme x item), plus school-wide
 // ---------------------------------------------------------------------
 
 // --- per-programme -----------------------------------------------------
@@ -306,6 +324,8 @@ shared FS_LO = fnItemTable("Football Science", "LO");
 shared FS_Assess = fnItemTable("Football Science", "Assess");
 shared FS_Hours = fnItemTable("Football Science", "Hours");
 shared FS_Mapping = fnItemTable("Football Science", "Mapping");
+shared FS_Meta_Wide = fnPivotKeyValue(FS_Meta, "Module Data", "Details");
+shared FS_Hours_Wide = fnPivotKeyValue(FS_Hours, "Component", "Contact Hours");
 
 // Physical Education
 shared PE_Meta = fnItemTable("Physical Education", "Meta");
@@ -313,6 +333,8 @@ shared PE_LO = fnItemTable("Physical Education", "LO");
 shared PE_Assess = fnItemTable("Physical Education", "Assess");
 shared PE_Hours = fnItemTable("Physical Education", "Hours");
 shared PE_Mapping = fnItemTable("Physical Education", "Mapping");
+shared PE_Meta_Wide = fnPivotKeyValue(PE_Meta, "Module Data", "Details");
+shared PE_Hours_Wide = fnPivotKeyValue(PE_Hours, "Component", "Contact Hours");
 
 // Sport and Exercise Science
 shared SES_Meta = fnItemTable("Sport and Exercise Science", "Meta");
@@ -320,6 +342,8 @@ shared SES_LO = fnItemTable("Sport and Exercise Science", "LO");
 shared SES_Assess = fnItemTable("Sport and Exercise Science", "Assess");
 shared SES_Hours = fnItemTable("Sport and Exercise Science", "Hours");
 shared SES_Mapping = fnItemTable("Sport and Exercise Science", "Mapping");
+shared SES_Meta_Wide = fnPivotKeyValue(SES_Meta, "Module Data", "Details");
+shared SES_Hours_Wide = fnPivotKeyValue(SES_Hours, "Component", "Contact Hours");
 
 // Sport Coaching
 shared COACH_Meta = fnItemTable("Sport Coaching", "Meta");
@@ -327,6 +351,8 @@ shared COACH_LO = fnItemTable("Sport Coaching", "LO");
 shared COACH_Assess = fnItemTable("Sport Coaching", "Assess");
 shared COACH_Hours = fnItemTable("Sport Coaching", "Hours");
 shared COACH_Mapping = fnItemTable("Sport Coaching", "Mapping");
+shared COACH_Meta_Wide = fnPivotKeyValue(COACH_Meta, "Module Data", "Details");
+shared COACH_Hours_Wide = fnPivotKeyValue(COACH_Hours, "Component", "Contact Hours");
 
 // Sport Nutrition
 shared NUTR_Meta = fnItemTable("Sport Nutrition", "Meta");
@@ -334,6 +360,8 @@ shared NUTR_LO = fnItemTable("Sport Nutrition", "LO");
 shared NUTR_Assess = fnItemTable("Sport Nutrition", "Assess");
 shared NUTR_Hours = fnItemTable("Sport Nutrition", "Hours");
 shared NUTR_Mapping = fnItemTable("Sport Nutrition", "Mapping");
+shared NUTR_Meta_Wide = fnPivotKeyValue(NUTR_Meta, "Module Data", "Details");
+shared NUTR_Hours_Wide = fnPivotKeyValue(NUTR_Hours, "Component", "Contact Hours");
 
 // Sport Psychology
 shared PSYC_Meta = fnItemTable("Sport Psychology", "Meta");
@@ -341,6 +369,8 @@ shared PSYC_LO = fnItemTable("Sport Psychology", "LO");
 shared PSYC_Assess = fnItemTable("Sport Psychology", "Assess");
 shared PSYC_Hours = fnItemTable("Sport Psychology", "Hours");
 shared PSYC_Mapping = fnItemTable("Sport Psychology", "Mapping");
+shared PSYC_Meta_Wide = fnPivotKeyValue(PSYC_Meta, "Module Data", "Details");
+shared PSYC_Hours_Wide = fnPivotKeyValue(PSYC_Hours, "Component", "Contact Hours");
 
 // --- school-wide (all programmes, unfiltered) ---------------------------
 

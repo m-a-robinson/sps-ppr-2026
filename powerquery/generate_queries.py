@@ -26,6 +26,14 @@ PROGRAMMES = [
 # still supports any item suffix; add one back here if that changes.
 ITEMS = ["Meta", "LO", "Assess", "Hours", "Mapping"]
 
+# Items that come out of fnItemTable long/key-value (one row per module
+# field, not per module) -> (key column, value column) to pivot on. A
+# "<ProgCode>_<Item>_Wide" query is generated for each, one row per module.
+KEY_VALUE_ITEMS = {
+    "Meta": ("Module Data", "Details"),
+    "Hours": ("Component", "Contact Hours"),
+}
+
 PREAMBLE = r'''section Section1;
 
 // =====================================================================
@@ -323,7 +331,25 @@ shared fnItemTable = (programmeFilter as nullable text, itemSuffix as text) as t
         FilteredBlankRows;
 
 // ---------------------------------------------------------------------
-// 5. GENERATED QUERIES — one per (programme x item), plus school-wide
+// 5. WIDE VIEWS — Meta/Hours reshaped to one row per module
+// ---------------------------------------------------------------------
+//
+// FS_Meta and FS_Hours (etc.) come out of fnItemTable long/key-value —
+// one row per (module, field), not one row per module — because that's
+// their table's actual shape, and Phase 2 deliberately doesn't reshape.
+// This is that reshape, factored out the same way fnItemTable is: one
+// function, called once per programme for each of the two key-value
+// items, rather than duplicating a pivot step 6+ times.
+
+shared fnPivotKeyValue = (baseTable as table, keyColumn as text, valueColumn as text) as table =>
+    let
+        PivotValues = List.Distinct(Table.Column(baseTable, keyColumn)),
+        Pivoted = Table.Pivot(baseTable, PivotValues, keyColumn, valueColumn, each List.First(_, null))
+    in
+        Pivoted;
+
+// ---------------------------------------------------------------------
+// 6. GENERATED QUERIES — one per (programme x item), plus school-wide
 // ---------------------------------------------------------------------
 '''.lstrip("\n")
 
@@ -335,6 +361,9 @@ def build_queries_block() -> str:
         lines.append(f"// {programme}")
         for item in ITEMS:
             lines.append(f'shared {code}_{item} = fnItemTable("{programme}", "{item}");')
+        for item, (key_col, value_col) in KEY_VALUE_ITEMS.items():
+            if item in ITEMS:
+                lines.append(f'shared {code}_{item}_Wide = fnPivotKeyValue({code}_{item}, "{key_col}", "{value_col}");')
         lines.append("")
 
     lines.append("// --- school-wide (all programmes, unfiltered) ---------------------------\n")
