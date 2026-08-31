@@ -67,12 +67,12 @@ connects out.
 4. **Home → New Source → Blank Query**, then **Home → Advanced Editor**.
 5. Delete the placeholder text and paste in the entire contents of
    `queries.pq`, then **Done**. Power Query reads a full `section` block
-   and creates one query per `shared` binding — you'll see all ~80 appear
+   and creates one query per `shared` binding — you'll see all 46 appear
    in the Queries pane at once, not just the blank query you started from.
 6. `SourceTables`, `SourceTablesParsed`, `ModuleRegister`, `RegisterBlocks`
    and `GetWorkbookFiles`/`GetRegisterFileContent` are building blocks —
    right-click each and set **"Enable load"** off (they don't need their
-   own sheet). The ~70 `<ProgCode>_<Item>` / `All_<Item>` queries are the
+   own sheet). The 35 `<ProgCode>_<Item>` / `All_<Item>` queries are the
    ones worth loading, one per Phase 3 DASHBOARD view.
 
 If you'd rather have `SourceFolder` as a proper Power Query *Parameter*
@@ -91,12 +91,20 @@ column names across every matched module rather than trusting the first
 one, so this doesn't break anything, but it's a one-cell tidy-up worth
 doing at some point.
 
+## Item scope
+
+Only `Meta`, `LO`, `Assess`, `Hours` and `Mapping` are generated — the 5
+items relevant to assessment/LO/hours mapping. `Weekly`, `Aims`,
+`Syllabus`, `Overview` and `Notes` are narrative/descriptive content, not
+mapping data, so no queries are generated for them. `fnItemTable` still
+supports any item suffix — add one back to `ITEMS` in
+`generate_queries.py` and re-run it if that changes.
+
 ## What's deliberately not here yet
 
-- **Pivoting `Meta`/`Hours` into one row per module**, and **combining
-  the free-text items (`Aims`, `Syllabus`, `Overview`, `Notes`) into one
-  block per module** — both are Phase 3 (DASHBOARD view) concerns, built
-  on top of these queries, not part of the raw extraction layer.
+- **Pivoting `Meta`/`Hours` into one row per module** — a Phase 3
+  (DASHBOARD view) concern, built on top of these queries, not part of
+  the raw extraction layer.
 - **SharePoint folder-path filtering** — the register's footer row (the
   6 SharePoint URLs) isn't parsed yet, since it's only needed once
   `UseSharePoint` flips to `true`. `GetWorkbookFiles`'s SharePoint branch

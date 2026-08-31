@@ -19,8 +19,12 @@ PROGRAMMES = [
     ("Sport Psychology", "PSYC"),
 ]
 
-# The 10 standard "_MODULECODE_ITEM" tables found on every module sheet.
-ITEMS = ["Meta", "LO", "Assess", "Weekly", "Hours", "Mapping", "Aims", "Syllabus", "Overview", "Notes"]
+# Every module sheet has 10 standard "_MODULECODE_ITEM" tables, but only
+# these 5 are relevant to assessment/LO/hours mapping — Weekly, Aims,
+# Syllabus, Overview and Notes are narrative/descriptive content, not
+# mapping data, so no queries are generated for them. fnItemTable itself
+# still supports any item suffix; add one back here if that changes.
+ITEMS = ["Meta", "LO", "Assess", "Hours", "Mapping"]
 
 PREAMBLE = r'''section Section1;
 
@@ -60,12 +64,15 @@ PREAMBLE = r'''section Section1;
 //     this by preferring, for each (Programme, ModuleCode), the table
 //     from that programme's own workbook when one exists there, and only
 //     falling back to another workbook when it doesn't — see step 4.
-//   - Meta/Hours (key-value) and Aims/Syllabus/Overview/Notes (single-
-//     column free text) are deliberately left in their raw per-record
-//     shape here. Pivoting Meta/Hours into one row per module, and
-//     combining the free-text items into one block per module, is a
-//     Phase 3 (DASHBOARD view) concern layered on top of these queries
-//     — not done here, so these stay simple, provable building blocks.
+//   - Meta/Hours (key-value) are deliberately left in their raw per-record
+//     shape here. Pivoting them into one row per module is a Phase 3
+//     (DASHBOARD view) concern layered on top of these queries — not
+//     done here, so these stay simple, provable building blocks.
+//   - Only Meta, LO, Assess, Hours and Mapping are generated below — the
+//     5 items relevant to assessment/LO/hours mapping. Weekly, Aims,
+//     Syllabus, Overview and Notes are narrative/descriptive content, not
+//     mapping data, so no queries are generated for them (fnItemTable
+//     still supports any item suffix if that changes).
 
 // ---------------------------------------------------------------------
 // 1. SETTINGS — edit these two lines for your machine, nothing else
@@ -92,6 +99,13 @@ shared GetWorkbookFiles =
         LocalWorkbooks = Table.SelectRows(LocalSource, each
             Text.Contains([Name], "AllModuleProformas")
             and (Text.EndsWith([Name], ".xlsx") or Text.EndsWith([Name], ".xlsm"))
+            // Exclude Excel's own lock file for whichever workbook is currently
+            // open (~$Football Science - AllModuleProformas.xlsx) and macOS's
+            // AppleDouble sidecar files (._Football Science - ...) — both match
+            // the filters above but aren't real workbooks, and Excel.Workbook()
+            // on either throws "File contains corrupted data".
+            and not Text.StartsWith([Name], "~$")
+            and not Text.StartsWith([Name], ".")
         ),
 
         SharePointAllFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
@@ -123,6 +137,16 @@ shared GetRegisterFileContent =
 // Every named Excel Table, from every workbook, in one pooled list.
 // This — not any per-query source read — is what makes the "single
 // home, many programmes" principle work without extra bookkeeping.
+//
+// Table.Buffer here matters: SourceTables is referenced by every one of
+// the 30+ downstream queries below. Without forcing it to materialize
+// once, a refresh can re-open and re-scan all 6 workbooks once PER
+// downstream query instead of once total — the difference between a
+// multi-minute refresh and a fast one. (Also worth checking, outside
+// this file: Power Query Editor -> File -> Options and Settings ->
+// Query Options -> Privacy -> "Always ignore Privacy Level settings".
+// Mismatched privacy levels across sources force the same kind of
+// isolated per-query re-evaluation that buffering is working around.)
 shared SourceTables =
     let
         Files = GetWorkbookFiles,
@@ -130,9 +154,10 @@ shared SourceTables =
         Expanded = Table.ExpandTableColumn(AddWorkbookData, "Workbook", {"Name", "Data", "Kind"}, {"TableName", "TableData", "Kind"}),
         OnlyTables = Table.SelectRows(Expanded, each [Kind] = "Table"),
         Trimmed = Table.SelectColumns(OnlyTables, {"Name", "TableName", "TableData"}),
-        Renamed = Table.RenameColumns(Trimmed, {{"Name", "SourceWorkbook"}})
+        Renamed = Table.RenameColumns(Trimmed, {{"Name", "SourceWorkbook"}}),
+        Buffered = Table.Buffer(Renamed)
     in
-        Renamed;
+        Buffered;
 
 // "_4101SPS_Meta" (or "4101SPS_Meta") -> [ModuleCode = "4101SPS", ItemSuffix = "Meta"]
 shared fnParseTableName = (tableName as text) as record =>
@@ -144,15 +169,23 @@ shared fnParseTableName = (tableName as text) as record =>
     in
         [ModuleCode = Code, ItemSuffix = Item];
 
+// Kept in sync with ITEMS in generate_queries.py — the items actually
+// queried below. Filtering to these here (not just inside fnItemTable)
+// means SourceTablesParsed never carries the other 5 items' rows
+// (Weekly, Aims, Syllabus, Overview, Notes) through the buffer at all.
+shared RelevantItems = __RELEVANT_ITEMS_LIST__;
+
 shared SourceTablesParsed =
     let
         Source = SourceTables,
         AddParsed = Table.AddColumn(Source, "Parsed", each fnParseTableName([TableName])),
         AddModuleCode = Table.AddColumn(AddParsed, "ModuleCode", each [Parsed][ModuleCode]),
         AddItemSuffix = Table.AddColumn(AddModuleCode, "ItemSuffix", each [Parsed][ItemSuffix]),
-        Cleaned = Table.RemoveColumns(AddItemSuffix, {"Parsed"})
+        Cleaned = Table.RemoveColumns(AddItemSuffix, {"Parsed"}),
+        OnlyRelevantItems = Table.SelectRows(Cleaned, each List.Contains(RelevantItems, [ItemSuffix])),
+        Buffered = Table.Buffer(OnlyRelevantItems)
     in
-        Cleaned;
+        Buffered;
 
 // ---------------------------------------------------------------------
 // 3. MODULE REGISTER — read "Modules by programme.xlsx" as it stands
@@ -207,9 +240,10 @@ shared ModuleRegister =
                 Table.SelectColumns(AddProgCode, {"Programme", "ProgCode", "ModuleCode", "ModuleTitle"}),
 
         AllBlocks = List.Transform(RegisterBlocks, each ExtractBlock(_)),
-        Combined = Table.Combine(AllBlocks)
+        Combined = Table.Combine(AllBlocks),
+        Buffered = Table.Buffer(Combined)
     in
-        Combined;
+        Buffered;
 
 // ---------------------------------------------------------------------
 // 4. fnItemTable — every query below is just a call to this
@@ -271,9 +305,22 @@ shared fnItemTable = (programmeFilter as nullable text, itemSuffix as text) as t
             if Table.IsEmpty(Recombined) then
                 Recombined
             else
-                Table.ExpandTableColumn(Recombined, "TableData", AllColumnNames)
+                Table.ExpandTableColumn(Recombined, "TableData", AllColumnNames),
+
+        // Source tables have fixed-capacity rows that aren't always fully
+        // used (e.g. an _Assess table has 4 assessment slots, often only
+        // 1-3 filled in) — drop a row only when every one of the item's
+        // own columns is blank, so an unused slot disappears without
+        // hardcoding a column name specific to any one item type.
+        FilteredBlankRows =
+            if Table.IsEmpty(ExpandedContent) or List.IsEmpty(AllColumnNames) then
+                ExpandedContent
+            else
+                Table.SelectRows(ExpandedContent, (row) =>
+                    List.AnyTrue(List.Transform(AllColumnNames, (col) => Record.Field(row, col) <> null))
+                )
     in
-        ExpandedContent;
+        FilteredBlankRows;
 
 // ---------------------------------------------------------------------
 // 5. GENERATED QUERIES — one per (programme x item), plus school-wide
@@ -299,7 +346,9 @@ def build_queries_block() -> str:
 
 def main():
     out_path = "queries.pq"
-    content = PREAMBLE + "\n" + build_queries_block()
+    relevant_items_m_list = "{" + ", ".join(f'"{item}"' for item in ITEMS) + "}"
+    preamble = PREAMBLE.replace("__RELEVANT_ITEMS_LIST__", relevant_items_m_list)
+    content = preamble + "\n" + build_queries_block()
     with open(out_path, "w") as f:
         f.write(content)
     n_programme_queries = len(PROGRAMMES) * len(ITEMS)
