@@ -312,6 +312,20 @@ shared fnPivotKeyValue = (baseTable as table, keyColumn as text, valueColumn as 
     in
         Pivoted;
 
+// The dashboard's summary table: one row per module, pulling in just the
+// Hours total (not the full component breakdown — that's still available
+// separately in *_Hours_Wide for anyone who wants it). MissingField.UseNull
+// guards against a programme whose Hours data turns out not to have a
+// "Total" row for every module — untested school-wide, so fail soft here
+// rather than error, for a first concept pass.
+shared fnModuleOverview = (metaWide as table, hoursWide as table) as table =>
+    let
+        HoursTotal = Table.SelectColumns(hoursWide, {"ModuleCode", "Total"}, MissingField.UseNull),
+        Merged = Table.NestedJoin(metaWide, {"ModuleCode"}, HoursTotal, {"ModuleCode"}, "HoursData", JoinKind.LeftOuter),
+        Expanded = Table.ExpandTableColumn(Merged, "HoursData", {"Total"}, {"Total Contact Hours"})
+    in
+        Expanded;
+
 // ---------------------------------------------------------------------
 // 6. GENERATED QUERIES — one per (programme x item), plus school-wide
 // ---------------------------------------------------------------------
@@ -326,6 +340,7 @@ shared FS_Hours = fnItemTable("Football Science", "Hours");
 shared FS_Mapping = fnItemTable("Football Science", "Mapping");
 shared FS_Meta_Wide = fnPivotKeyValue(FS_Meta, "Module Data", "Details");
 shared FS_Hours_Wide = fnPivotKeyValue(FS_Hours, "Component", "Contact Hours");
+shared FS_ModuleOverview = fnModuleOverview(FS_Meta_Wide, FS_Hours_Wide);
 
 // Physical Education
 shared PE_Meta = fnItemTable("Physical Education", "Meta");
@@ -335,6 +350,7 @@ shared PE_Hours = fnItemTable("Physical Education", "Hours");
 shared PE_Mapping = fnItemTable("Physical Education", "Mapping");
 shared PE_Meta_Wide = fnPivotKeyValue(PE_Meta, "Module Data", "Details");
 shared PE_Hours_Wide = fnPivotKeyValue(PE_Hours, "Component", "Contact Hours");
+shared PE_ModuleOverview = fnModuleOverview(PE_Meta_Wide, PE_Hours_Wide);
 
 // Sport and Exercise Science
 shared SES_Meta = fnItemTable("Sport and Exercise Science", "Meta");
@@ -344,6 +360,7 @@ shared SES_Hours = fnItemTable("Sport and Exercise Science", "Hours");
 shared SES_Mapping = fnItemTable("Sport and Exercise Science", "Mapping");
 shared SES_Meta_Wide = fnPivotKeyValue(SES_Meta, "Module Data", "Details");
 shared SES_Hours_Wide = fnPivotKeyValue(SES_Hours, "Component", "Contact Hours");
+shared SES_ModuleOverview = fnModuleOverview(SES_Meta_Wide, SES_Hours_Wide);
 
 // Sport Coaching
 shared COACH_Meta = fnItemTable("Sport Coaching", "Meta");
@@ -353,6 +370,7 @@ shared COACH_Hours = fnItemTable("Sport Coaching", "Hours");
 shared COACH_Mapping = fnItemTable("Sport Coaching", "Mapping");
 shared COACH_Meta_Wide = fnPivotKeyValue(COACH_Meta, "Module Data", "Details");
 shared COACH_Hours_Wide = fnPivotKeyValue(COACH_Hours, "Component", "Contact Hours");
+shared COACH_ModuleOverview = fnModuleOverview(COACH_Meta_Wide, COACH_Hours_Wide);
 
 // Sport Nutrition
 shared NUTR_Meta = fnItemTable("Sport Nutrition", "Meta");
@@ -362,6 +380,7 @@ shared NUTR_Hours = fnItemTable("Sport Nutrition", "Hours");
 shared NUTR_Mapping = fnItemTable("Sport Nutrition", "Mapping");
 shared NUTR_Meta_Wide = fnPivotKeyValue(NUTR_Meta, "Module Data", "Details");
 shared NUTR_Hours_Wide = fnPivotKeyValue(NUTR_Hours, "Component", "Contact Hours");
+shared NUTR_ModuleOverview = fnModuleOverview(NUTR_Meta_Wide, NUTR_Hours_Wide);
 
 // Sport Psychology
 shared PSYC_Meta = fnItemTable("Sport Psychology", "Meta");
@@ -371,6 +390,7 @@ shared PSYC_Hours = fnItemTable("Sport Psychology", "Hours");
 shared PSYC_Mapping = fnItemTable("Sport Psychology", "Mapping");
 shared PSYC_Meta_Wide = fnPivotKeyValue(PSYC_Meta, "Module Data", "Details");
 shared PSYC_Hours_Wide = fnPivotKeyValue(PSYC_Hours, "Component", "Contact Hours");
+shared PSYC_ModuleOverview = fnModuleOverview(PSYC_Meta_Wide, PSYC_Hours_Wide);
 
 // --- school-wide (all programmes, unfiltered) ---------------------------
 

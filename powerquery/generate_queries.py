@@ -348,6 +348,20 @@ shared fnPivotKeyValue = (baseTable as table, keyColumn as text, valueColumn as 
     in
         Pivoted;
 
+// The dashboard's summary table: one row per module, pulling in just the
+// Hours total (not the full component breakdown — that's still available
+// separately in *_Hours_Wide for anyone who wants it). MissingField.UseNull
+// guards against a programme whose Hours data turns out not to have a
+// "Total" row for every module — untested school-wide, so fail soft here
+// rather than error, for a first concept pass.
+shared fnModuleOverview = (metaWide as table, hoursWide as table) as table =>
+    let
+        HoursTotal = Table.SelectColumns(hoursWide, {"ModuleCode", "Total"}, MissingField.UseNull),
+        Merged = Table.NestedJoin(metaWide, {"ModuleCode"}, HoursTotal, {"ModuleCode"}, "HoursData", JoinKind.LeftOuter),
+        Expanded = Table.ExpandTableColumn(Merged, "HoursData", {"Total"}, {"Total Contact Hours"})
+    in
+        Expanded;
+
 // ---------------------------------------------------------------------
 // 6. GENERATED QUERIES — one per (programme x item), plus school-wide
 // ---------------------------------------------------------------------
@@ -364,6 +378,8 @@ def build_queries_block() -> str:
         for item, (key_col, value_col) in KEY_VALUE_ITEMS.items():
             if item in ITEMS:
                 lines.append(f'shared {code}_{item}_Wide = fnPivotKeyValue({code}_{item}, "{key_col}", "{value_col}");')
+        if "Meta" in ITEMS and "Hours" in ITEMS:
+            lines.append(f'shared {code}_ModuleOverview = fnModuleOverview({code}_Meta_Wide, {code}_Hours_Wide);')
         lines.append("")
 
     lines.append("// --- school-wide (all programmes, unfiltered) ---------------------------\n")
