@@ -312,22 +312,79 @@ shared fnPivotKeyValue = (baseTable as table, keyColumn as text, valueColumn as 
     in
         Pivoted;
 
-// The dashboard's summary table: one row per module, pulling in just the
-// Hours total (not the full component breakdown — that's still available
-// separately in *_Hours_Wide for anyone who wants it). MissingField.UseNull
-// guards against a programme whose Hours data turns out not to have a
-// "Total" row for every module — untested school-wide, so fail soft here
-// rather than error, for a first concept pass.
+// The dashboard's summary table: one row per module. Keeps only the
+// columns actually worth showing — drops the join plumbing (SourceWorkbook,
+// TableName, ItemSuffix, Programme, ProgCode: all constant once you're
+// looking at one programme's own dashboard) and the pivot's duplicate
+// columns ("Module Code"/"Module Title"/"Programme(s)" repeat ModuleCode/
+// ModuleTitle/Programme under their raw Meta-field names). Adds "Hours per
+// Credit" as a cheap outlier check — no external benchmark needed, just
+// something to sort by and eyeball for modules that look wrong relative to
+// the rest of the cohort. MissingField.UseNull guards Table.SelectColumns
+// against a programme whose Hours data turns out not to have a "Total" row
+// for every module — untested school-wide, so fail soft here rather than
+// error, for a first concept pass.
 shared fnModuleOverview = (metaWide as table, hoursWide as table) as table =>
     let
         HoursTotal = Table.SelectColumns(hoursWide, {"ModuleCode", "Total"}, MissingField.UseNull),
         Merged = Table.NestedJoin(metaWide, {"ModuleCode"}, HoursTotal, {"ModuleCode"}, "HoursData", JoinKind.LeftOuter),
-        Expanded = Table.ExpandTableColumn(Merged, "HoursData", {"Total"}, {"Total Contact Hours"})
+        Expanded = Table.ExpandTableColumn(Merged, "HoursData", {"Total"}, {"Total Contact Hours"}),
+        Selected = Table.SelectColumns(Expanded, {
+            "ModuleCode", "ModuleTitle", "Level", "Semester", "Credits",
+            "Module Leader", "Module Type", "Total Contact Hours"
+        }),
+        Typed = Table.TransformColumnTypes(Selected, {
+            {"Credits", Int64.Type}, {"Level", Int64.Type}, {"Semester", Int64.Type},
+            {"Total Contact Hours", Int64.Type}
+        }),
+        AddRatio = Table.AddColumn(Typed, "Hours per Credit", each
+            if [Credits] = null or [Credits] = 0 or [Total Contact Hours] = null then null
+            else Number.Round([Total Contact Hours] / [Credits], 2), Double.Type)
     in
-        Expanded;
+        AddRatio;
 
 // ---------------------------------------------------------------------
-// 6. GENERATED QUERIES — one per (programme x item), plus school-wide
+// 6. GRADUATE SKILLS COVERAGE
+// ---------------------------------------------------------------------
+//
+// Each workbook's LISTS sheet has a "LISTS_Table" (Category, Skill) that
+// every module's _Mapping table draws its dropdown values from — the
+// master catalogue of graduate skills the school actually tracks.
+// FS_Mapping alone can only show what IS covered; checking what's NOT
+// needs this catalogue to compare against. Pulled from SourceTables (not
+// SourceTablesParsed, which already filtered LISTS_Table out — its
+// parsed ItemSuffix is "Table", not one of the 5 relevant items) and
+// unioned across all 6 workbooks rather than trusting just one copy, in
+// case they've drifted from each other.
+shared GraduateSkillsCatalogue =
+    let
+        Matches = Table.SelectRows(SourceTables, each [TableName] = "LISTS_Table"),
+        Expanded = Table.ExpandTableColumn(Matches, "TableData", {"Category", "Skill"}),
+        Distinct = Table.Distinct(Table.SelectColumns(Expanded, {"Category", "Skill"}))
+    in
+        Distinct;
+
+// For a programme's _Mapping table: every catalogue (Category, Skill),
+// whether it's covered anywhere in that programme, by how many modules,
+// and which ones — so a gap reads as Covered = FALSE, not just an
+// absence you'd have to notice yourself.
+shared fnSkillsCoverage = (mappingTable as table) as table =>
+    let
+        UsedDetail = Table.SelectColumns(mappingTable, {"ModuleCode", "ModuleTitle", "Graduate Skills Category", "Graduate Skill"}),
+        RenamedDetail = Table.RenameColumns(UsedDetail, {{"Graduate Skills Category", "Category"}, {"Graduate Skill", "Skill"}}),
+        Grouped = Table.Group(RenamedDetail, {"Category", "Skill"}, {
+            {"Modules Covering", each Text.Combine(List.Distinct(List.RemoveNulls([ModuleTitle])), "; "), type text},
+            {"Module Count", each List.Count(List.Distinct(List.RemoveNulls([ModuleCode]))), Int64.Type}
+        }),
+        Merged = Table.NestedJoin(GraduateSkillsCatalogue, {"Category", "Skill"}, Grouped, {"Category", "Skill"}, "Match", JoinKind.LeftOuter),
+        Expanded = Table.ExpandTableColumn(Merged, "Match", {"Modules Covering", "Module Count"}, {"Modules Covering", "Module Count"}),
+        FillCount = Table.ReplaceValue(Expanded, null, 0, Replacer.ReplaceValue, {"Module Count"}),
+        AddCovered = Table.AddColumn(FillCount, "Covered", each [Module Count] > 0, type logical)
+    in
+        AddCovered;
+
+// ---------------------------------------------------------------------
+// 7. GENERATED QUERIES — one per (programme x item), plus school-wide
 // ---------------------------------------------------------------------
 
 // --- per-programme -----------------------------------------------------
@@ -341,6 +398,7 @@ shared FS_Mapping = fnItemTable("Football Science", "Mapping");
 shared FS_Meta_Wide = fnPivotKeyValue(FS_Meta, "Module Data", "Details");
 shared FS_Hours_Wide = fnPivotKeyValue(FS_Hours, "Component", "Contact Hours");
 shared FS_ModuleOverview = fnModuleOverview(FS_Meta_Wide, FS_Hours_Wide);
+shared FS_SkillsCoverage = fnSkillsCoverage(FS_Mapping);
 
 // Physical Education
 shared PE_Meta = fnItemTable("Physical Education", "Meta");
@@ -351,6 +409,7 @@ shared PE_Mapping = fnItemTable("Physical Education", "Mapping");
 shared PE_Meta_Wide = fnPivotKeyValue(PE_Meta, "Module Data", "Details");
 shared PE_Hours_Wide = fnPivotKeyValue(PE_Hours, "Component", "Contact Hours");
 shared PE_ModuleOverview = fnModuleOverview(PE_Meta_Wide, PE_Hours_Wide);
+shared PE_SkillsCoverage = fnSkillsCoverage(PE_Mapping);
 
 // Sport and Exercise Science
 shared SES_Meta = fnItemTable("Sport and Exercise Science", "Meta");
@@ -361,6 +420,7 @@ shared SES_Mapping = fnItemTable("Sport and Exercise Science", "Mapping");
 shared SES_Meta_Wide = fnPivotKeyValue(SES_Meta, "Module Data", "Details");
 shared SES_Hours_Wide = fnPivotKeyValue(SES_Hours, "Component", "Contact Hours");
 shared SES_ModuleOverview = fnModuleOverview(SES_Meta_Wide, SES_Hours_Wide);
+shared SES_SkillsCoverage = fnSkillsCoverage(SES_Mapping);
 
 // Sport Coaching
 shared COACH_Meta = fnItemTable("Sport Coaching", "Meta");
@@ -371,6 +431,7 @@ shared COACH_Mapping = fnItemTable("Sport Coaching", "Mapping");
 shared COACH_Meta_Wide = fnPivotKeyValue(COACH_Meta, "Module Data", "Details");
 shared COACH_Hours_Wide = fnPivotKeyValue(COACH_Hours, "Component", "Contact Hours");
 shared COACH_ModuleOverview = fnModuleOverview(COACH_Meta_Wide, COACH_Hours_Wide);
+shared COACH_SkillsCoverage = fnSkillsCoverage(COACH_Mapping);
 
 // Sport Nutrition
 shared NUTR_Meta = fnItemTable("Sport Nutrition", "Meta");
@@ -381,6 +442,7 @@ shared NUTR_Mapping = fnItemTable("Sport Nutrition", "Mapping");
 shared NUTR_Meta_Wide = fnPivotKeyValue(NUTR_Meta, "Module Data", "Details");
 shared NUTR_Hours_Wide = fnPivotKeyValue(NUTR_Hours, "Component", "Contact Hours");
 shared NUTR_ModuleOverview = fnModuleOverview(NUTR_Meta_Wide, NUTR_Hours_Wide);
+shared NUTR_SkillsCoverage = fnSkillsCoverage(NUTR_Mapping);
 
 // Sport Psychology
 shared PSYC_Meta = fnItemTable("Sport Psychology", "Meta");
@@ -391,6 +453,7 @@ shared PSYC_Mapping = fnItemTable("Sport Psychology", "Mapping");
 shared PSYC_Meta_Wide = fnPivotKeyValue(PSYC_Meta, "Module Data", "Details");
 shared PSYC_Hours_Wide = fnPivotKeyValue(PSYC_Hours, "Component", "Contact Hours");
 shared PSYC_ModuleOverview = fnModuleOverview(PSYC_Meta_Wide, PSYC_Hours_Wide);
+shared PSYC_SkillsCoverage = fnSkillsCoverage(PSYC_Mapping);
 
 // --- school-wide (all programmes, unfiltered) ---------------------------
 

@@ -348,22 +348,79 @@ shared fnPivotKeyValue = (baseTable as table, keyColumn as text, valueColumn as 
     in
         Pivoted;
 
-// The dashboard's summary table: one row per module, pulling in just the
-// Hours total (not the full component breakdown — that's still available
-// separately in *_Hours_Wide for anyone who wants it). MissingField.UseNull
-// guards against a programme whose Hours data turns out not to have a
-// "Total" row for every module — untested school-wide, so fail soft here
-// rather than error, for a first concept pass.
+// The dashboard's summary table: one row per module. Keeps only the
+// columns actually worth showing — drops the join plumbing (SourceWorkbook,
+// TableName, ItemSuffix, Programme, ProgCode: all constant once you're
+// looking at one programme's own dashboard) and the pivot's duplicate
+// columns ("Module Code"/"Module Title"/"Programme(s)" repeat ModuleCode/
+// ModuleTitle/Programme under their raw Meta-field names). Adds "Hours per
+// Credit" as a cheap outlier check — no external benchmark needed, just
+// something to sort by and eyeball for modules that look wrong relative to
+// the rest of the cohort. MissingField.UseNull guards Table.SelectColumns
+// against a programme whose Hours data turns out not to have a "Total" row
+// for every module — untested school-wide, so fail soft here rather than
+// error, for a first concept pass.
 shared fnModuleOverview = (metaWide as table, hoursWide as table) as table =>
     let
         HoursTotal = Table.SelectColumns(hoursWide, {"ModuleCode", "Total"}, MissingField.UseNull),
         Merged = Table.NestedJoin(metaWide, {"ModuleCode"}, HoursTotal, {"ModuleCode"}, "HoursData", JoinKind.LeftOuter),
-        Expanded = Table.ExpandTableColumn(Merged, "HoursData", {"Total"}, {"Total Contact Hours"})
+        Expanded = Table.ExpandTableColumn(Merged, "HoursData", {"Total"}, {"Total Contact Hours"}),
+        Selected = Table.SelectColumns(Expanded, {
+            "ModuleCode", "ModuleTitle", "Level", "Semester", "Credits",
+            "Module Leader", "Module Type", "Total Contact Hours"
+        }),
+        Typed = Table.TransformColumnTypes(Selected, {
+            {"Credits", Int64.Type}, {"Level", Int64.Type}, {"Semester", Int64.Type},
+            {"Total Contact Hours", Int64.Type}
+        }),
+        AddRatio = Table.AddColumn(Typed, "Hours per Credit", each
+            if [Credits] = null or [Credits] = 0 or [Total Contact Hours] = null then null
+            else Number.Round([Total Contact Hours] / [Credits], 2), Double.Type)
     in
-        Expanded;
+        AddRatio;
 
 // ---------------------------------------------------------------------
-// 6. GENERATED QUERIES — one per (programme x item), plus school-wide
+// 6. GRADUATE SKILLS COVERAGE
+// ---------------------------------------------------------------------
+//
+// Each workbook's LISTS sheet has a "LISTS_Table" (Category, Skill) that
+// every module's _Mapping table draws its dropdown values from — the
+// master catalogue of graduate skills the school actually tracks.
+// FS_Mapping alone can only show what IS covered; checking what's NOT
+// needs this catalogue to compare against. Pulled from SourceTables (not
+// SourceTablesParsed, which already filtered LISTS_Table out — its
+// parsed ItemSuffix is "Table", not one of the 5 relevant items) and
+// unioned across all 6 workbooks rather than trusting just one copy, in
+// case they've drifted from each other.
+shared GraduateSkillsCatalogue =
+    let
+        Matches = Table.SelectRows(SourceTables, each [TableName] = "LISTS_Table"),
+        Expanded = Table.ExpandTableColumn(Matches, "TableData", {"Category", "Skill"}),
+        Distinct = Table.Distinct(Table.SelectColumns(Expanded, {"Category", "Skill"}))
+    in
+        Distinct;
+
+// For a programme's _Mapping table: every catalogue (Category, Skill),
+// whether it's covered anywhere in that programme, by how many modules,
+// and which ones — so a gap reads as Covered = FALSE, not just an
+// absence you'd have to notice yourself.
+shared fnSkillsCoverage = (mappingTable as table) as table =>
+    let
+        UsedDetail = Table.SelectColumns(mappingTable, {"ModuleCode", "ModuleTitle", "Graduate Skills Category", "Graduate Skill"}),
+        RenamedDetail = Table.RenameColumns(UsedDetail, {{"Graduate Skills Category", "Category"}, {"Graduate Skill", "Skill"}}),
+        Grouped = Table.Group(RenamedDetail, {"Category", "Skill"}, {
+            {"Modules Covering", each Text.Combine(List.Distinct(List.RemoveNulls([ModuleTitle])), "; "), type text},
+            {"Module Count", each List.Count(List.Distinct(List.RemoveNulls([ModuleCode]))), Int64.Type}
+        }),
+        Merged = Table.NestedJoin(GraduateSkillsCatalogue, {"Category", "Skill"}, Grouped, {"Category", "Skill"}, "Match", JoinKind.LeftOuter),
+        Expanded = Table.ExpandTableColumn(Merged, "Match", {"Modules Covering", "Module Count"}, {"Modules Covering", "Module Count"}),
+        FillCount = Table.ReplaceValue(Expanded, null, 0, Replacer.ReplaceValue, {"Module Count"}),
+        AddCovered = Table.AddColumn(FillCount, "Covered", each [Module Count] > 0, type logical)
+    in
+        AddCovered;
+
+// ---------------------------------------------------------------------
+// 7. GENERATED QUERIES — one per (programme x item), plus school-wide
 // ---------------------------------------------------------------------
 '''.lstrip("\n")
 
@@ -380,6 +437,8 @@ def build_queries_block() -> str:
                 lines.append(f'shared {code}_{item}_Wide = fnPivotKeyValue({code}_{item}, "{key_col}", "{value_col}");')
         if "Meta" in ITEMS and "Hours" in ITEMS:
             lines.append(f'shared {code}_ModuleOverview = fnModuleOverview({code}_Meta_Wide, {code}_Hours_Wide);')
+        if "Mapping" in ITEMS:
+            lines.append(f'shared {code}_SkillsCoverage = fnSkillsCoverage({code}_Mapping);')
         lines.append("")
 
     lines.append("// --- school-wide (all programmes, unfiltered) ---------------------------\n")
