@@ -138,3 +138,11 @@ supports any item suffix — add one back to `ITEMS` in
   `UseSharePoint` flips to `true`. `GetWorkbookFiles`'s SharePoint branch
   currently mirrors the existing `FS_AllAssess` prototype's approach
   (filter by workbook name only); revisit folder filtering at that point.
+- **`Modules by programme.xlsx` needs to actually be on the SharePoint
+  site before `UseSharePoint` flips to `true`.** `GetRegisterFileContent`
+  looks for it by name across the whole site (any folder — `SharePoint.Files`
+  isn't scoped to one), so it doesn't need to be co-located with the 6
+  workbooks, but it does need to exist somewhere the querying account can
+  see. If it isn't uploaded yet, that query fails the moment the switch
+  flips (zero-row match → indexing an empty table). Check this before
+  testing the switch, not after.
