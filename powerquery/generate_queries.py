@@ -131,11 +131,19 @@ shared GetWorkbookFiles =
 shared GetRegisterFileContent =
     let
         LocalFiles = Folder.Files(SourceFolder),
-        LocalMatch = Table.SelectRows(LocalFiles, each [Name] = "Modules by programme.xlsx"),
+        // Case/whitespace-insensitive: an exact match here is fragile the
+        // moment this file gets re-uploaded to SharePoint under a slightly
+        // different name (trailing space, different capitalisation) --
+        // and a silent zero-row match fails downstream as an unhelpful
+        // "not enough elements" error, not something that points at this.
+        IsRegisterFile = (name as text) as logical =>
+            Text.Trim(Text.Lower(name)) = "modules by programme.xlsx",
+
+        LocalMatch = Table.SelectRows(LocalFiles, each IsRegisterFile([Name])),
         LocalRegister = LocalMatch{0}[Content],
 
         SharePointFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
-        SharePointMatch = Table.SelectRows(SharePointFiles, each [Name] = "Modules by programme.xlsx"),
+        SharePointMatch = Table.SelectRows(SharePointFiles, each IsRegisterFile([Name])),
         SharePointRegister = SharePointMatch{0}[Content],
 
         Result = if UseSharePoint then SharePointRegister else LocalRegister
