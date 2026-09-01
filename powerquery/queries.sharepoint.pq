@@ -51,21 +51,11 @@ section Section1;
 // 1. SETTINGS
 // ---------------------------------------------------------------------
 
-// Local folder containing the 7 xlsx files (this repo, cloned locally).
-// Desktop Excel only. Folder.Files (used below) is not supported by
-// Excel for the web's Power Query engine AT ALL -- just having it appear
-// in the query graph, even inside a branch UseSharePoint would skip at
-// runtime, is enough for a browser refresh to be refused outright. If
-// this workbook might ever be opened in Excel Online (or you're seeing
-// exactly that refusal against a live SharePoint site), use
-// queries.sharepoint.pq instead -- it has no local branch at all.
-shared SourceFolder = "C:\Users\YourName\sps-ppr-2026";
-
-// Flip to `true` only when ready to point at the live SharePoint site
-// instead of the local folder above. Nothing below needs to change.
-shared UseSharePoint = false;
-
-// Kept for when UseSharePoint flips to true — not used while false.
+// No local-folder option here, on purpose: this file is for wherever the
+// workbook might actually be opened, including Excel for the web, which
+// doesn't support Folder.Files (local filesystem access) at all -- not
+// even inside an unused branch of an if. For local desktop-only testing
+// against a git clone of this repo, use queries.pq instead.
 shared SharePointSiteRoot = "https://ljmu.sharepoint.com/teams/SPSRe-validation2026Team";
 
 // ---------------------------------------------------------------------
@@ -74,34 +64,18 @@ shared SharePointSiteRoot = "https://ljmu.sharepoint.com/teams/SPSRe-validation2
 
 shared GetWorkbookFiles =
     let
-        LocalSource = Folder.Files(SourceFolder),
-        LocalWorkbooks = Table.SelectRows(LocalSource, each
-            Text.Contains([Name], "AllModuleProformas")
-            and (Text.EndsWith([Name], ".xlsx") or Text.EndsWith([Name], ".xlsm"))
-            // Exclude Excel's own lock file for whichever workbook is currently
-            // open (~$Football Science - AllModuleProformas.xlsx) and macOS's
-            // AppleDouble sidecar files (._Football Science - ...) — both match
-            // the filters above but aren't real workbooks, and Excel.Workbook()
-            // on either throws "File contains corrupted data".
-            and not Text.StartsWith([Name], "~$")
-            and not Text.StartsWith([Name], ".")
-        ),
-
-        SharePointAllFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
-        SharePointExcelFiles = Table.SelectRows(SharePointAllFiles, each
+        AllFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
+        ExcelFiles = Table.SelectRows(AllFiles, each
             Text.EndsWith([Name], ".xlsx") or Text.EndsWith([Name], ".xlsm")
         ),
-        SharePointWorkbooks = Table.SelectRows(SharePointExcelFiles, each
+        Workbooks = Table.SelectRows(ExcelFiles, each
             Text.Contains([Name], "AllModuleProformas")
-        ),
-
-        Result = if UseSharePoint then SharePointWorkbooks else LocalWorkbooks
+        )
     in
-        Result;
+        Workbooks;
 
 shared GetRegisterFileContent =
     let
-        LocalFiles = Folder.Files(SourceFolder),
         // Case/whitespace-insensitive: an exact match here is fragile the
         // moment this file gets re-uploaded to SharePoint under a slightly
         // different name (trailing space, different capitalisation) --
@@ -110,16 +84,10 @@ shared GetRegisterFileContent =
         IsRegisterFile = (name as text) as logical =>
             Text.Trim(Text.Lower(name)) = "modules by programme.xlsx",
 
-        LocalMatch = Table.SelectRows(LocalFiles, each IsRegisterFile([Name])),
-        LocalRegister = LocalMatch{0}[Content],
-
-        SharePointFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
-        SharePointMatch = Table.SelectRows(SharePointFiles, each IsRegisterFile([Name])),
-        SharePointRegister = SharePointMatch{0}[Content],
-
-        Result = if UseSharePoint then SharePointRegister else LocalRegister
+        AllFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
+        Match = Table.SelectRows(AllFiles, each IsRegisterFile([Name]))
     in
-        Result;
+        Match{0}[Content];
 
 // Every named Excel Table, from every workbook, in one pooled list.
 // This — not any per-query source read — is what makes the "single

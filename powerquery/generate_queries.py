@@ -1,10 +1,22 @@
 """
-Generates powerquery/queries.pq from the templates below.
+Generates powerquery/queries.pq (local desktop-Excel testing) and
+powerquery/queries.sharepoint.pq (Excel Online / live SharePoint —
+no local-filesystem access at all) from the shared templates below.
+
+Why two files: Excel for the web's Power Query engine doesn't support
+Folder.Files (local filesystem access) *at all* — merely having it
+appear anywhere in the query graph, even in a branch an `if` would never
+take at runtime, is enough for the whole refresh to be refused. queries.pq
+keeps the local/SharePoint toggle for testing changes against a git clone
+before they go live; queries.sharepoint.pq has no local branch, no
+SourceFolder, no UseSharePoint — just SharePoint.Files, safe to open from
+a browser as well as desktop Excel.
 
 Why generated rather than hand-written: the per-programme, per-item queries
-(Phase 2) are ~60 near-identical one-liners (6 programmes x 10 items, plus
-10 school-wide unions). Hand-typing that many is where copy-paste typos
-live. Re-run this script if the programme list or item list changes:
+(Phase 2) are ~30 near-identical one-liners (6 programmes x 5 items, plus
+5 school-wide unions), plus the Phase 3 dashboard-view queries per
+programme. Hand-typing that many is where copy-paste typos live.
+Re-run this script if the programme list or item list changes:
 
     python3 generate_queries.py
 """
@@ -34,7 +46,7 @@ KEY_VALUE_ITEMS = {
     "Hours": ("Component", "Contact Hours"),
 }
 
-PREAMBLE = r'''section Section1;
+HEADER = r'''section Section1;
 
 // =====================================================================
 // SPS Revalidation — module mapping queries
@@ -42,11 +54,13 @@ PREAMBLE = r'''section Section1;
 // =====================================================================
 //
 // Layout:
-//   1. Settings          — the one thing you edit per machine
+//   1. Settings          — what you edit per machine / per deployment
 //   2. Source plumbing    — reads every workbook once, in one place
 //   3. Module register    — reshapes "Modules by programme.xlsx" as-is
 //   4. fnItemTable         — the one function every query below calls
-//   5. Generated queries   — one per (programme x item), plus school-wide
+//   5. Wide views          — Meta/Hours reshaped to one row per module
+//   6. Graduate skills coverage
+//   7. Generated queries   — one per (programme x item), plus school-wide
 //
 // Design notes:
 //   - "Single home" for shared modules needs no bookkeeping: SourceTables
@@ -73,9 +87,8 @@ PREAMBLE = r'''section Section1;
 //     from that programme's own workbook when one exists there, and only
 //     falling back to another workbook when it doesn't — see step 4.
 //   - Meta/Hours (key-value) are deliberately left in their raw per-record
-//     shape here. Pivoting them into one row per module is a Phase 3
-//     (DASHBOARD view) concern layered on top of these queries — not
-//     done here, so these stay simple, provable building blocks.
+//     shape in step 4. Pivoting them into one row per module is step 5,
+//     layered on top rather than mixed into the raw extraction.
 //   - Only Meta, LO, Assess, Hours and Mapping are generated below — the
 //     5 items relevant to assessment/LO/hours mapping. Weekly, Aims,
 //     Syllabus, Overview and Notes are narrative/descriptive content, not
@@ -83,11 +96,19 @@ PREAMBLE = r'''section Section1;
 //     still supports any item suffix if that changes).
 
 // ---------------------------------------------------------------------
-// 1. SETTINGS — edit these two lines for your machine, nothing else
+// 1. SETTINGS
 // ---------------------------------------------------------------------
 
-// Local folder containing the 7 xlsx files (this repo, cloned locally).
-// Used while the project develops against the GitHub repo, not SharePoint.
+'''
+
+SETTINGS_LOCAL = r'''// Local folder containing the 7 xlsx files (this repo, cloned locally).
+// Desktop Excel only. Folder.Files (used below) is not supported by
+// Excel for the web's Power Query engine AT ALL -- just having it appear
+// in the query graph, even inside a branch UseSharePoint would skip at
+// runtime, is enough for a browser refresh to be refused outright. If
+// this workbook might ever be opened in Excel Online (or you're seeing
+// exactly that refusal against a live SharePoint site), use
+// queries.sharepoint.pq instead -- it has no local branch at all.
 shared SourceFolder = "C:\Users\YourName\sps-ppr-2026";
 
 // Flip to `true` only when ready to point at the live SharePoint site
@@ -97,11 +118,24 @@ shared UseSharePoint = false;
 // Kept for when UseSharePoint flips to true — not used while false.
 shared SharePointSiteRoot = "https://ljmu.sharepoint.com/teams/SPSRe-validation2026Team";
 
-// ---------------------------------------------------------------------
+'''
+
+SETTINGS_SHAREPOINT = r'''// No local-folder option here, on purpose: this file is for wherever the
+// workbook might actually be opened, including Excel for the web, which
+// doesn't support Folder.Files (local filesystem access) at all -- not
+// even inside an unused branch of an if. For local desktop-only testing
+// against a git clone of this repo, use queries.pq instead.
+shared SharePointSiteRoot = "https://ljmu.sharepoint.com/teams/SPSRe-validation2026Team";
+
+'''
+
+PLUMBING_HEADER = r'''// ---------------------------------------------------------------------
 // 2. SOURCE PLUMBING — every workbook is read exactly once
 // ---------------------------------------------------------------------
 
-shared GetWorkbookFiles =
+'''
+
+PLUMBING_LOCAL = r'''shared GetWorkbookFiles =
     let
         LocalSource = Folder.Files(SourceFolder),
         LocalWorkbooks = Table.SelectRows(LocalSource, each
@@ -150,7 +184,38 @@ shared GetRegisterFileContent =
     in
         Result;
 
-// Every named Excel Table, from every workbook, in one pooled list.
+'''
+
+PLUMBING_SHAREPOINT = r'''shared GetWorkbookFiles =
+    let
+        AllFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
+        ExcelFiles = Table.SelectRows(AllFiles, each
+            Text.EndsWith([Name], ".xlsx") or Text.EndsWith([Name], ".xlsm")
+        ),
+        Workbooks = Table.SelectRows(ExcelFiles, each
+            Text.Contains([Name], "AllModuleProformas")
+        )
+    in
+        Workbooks;
+
+shared GetRegisterFileContent =
+    let
+        // Case/whitespace-insensitive: an exact match here is fragile the
+        // moment this file gets re-uploaded to SharePoint under a slightly
+        // different name (trailing space, different capitalisation) --
+        // and a silent zero-row match fails downstream as an unhelpful
+        // "not enough elements" error, not something that points at this.
+        IsRegisterFile = (name as text) as logical =>
+            Text.Trim(Text.Lower(name)) = "modules by programme.xlsx",
+
+        AllFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
+        Match = Table.SelectRows(AllFiles, each IsRegisterFile([Name]))
+    in
+        Match{0}[Content];
+
+'''
+
+REST = r'''// Every named Excel Table, from every workbook, in one pooled list.
 // This — not any per-query source read — is what makes the "single
 // home, many programmes" principle work without extra bookkeeping.
 //
@@ -430,7 +495,7 @@ shared fnSkillsCoverage = (mappingTable as table) as table =>
 // ---------------------------------------------------------------------
 // 7. GENERATED QUERIES — one per (programme x item), plus school-wide
 // ---------------------------------------------------------------------
-'''.lstrip("\n")
+'''
 
 
 def build_queries_block() -> str:
@@ -456,17 +521,28 @@ def build_queries_block() -> str:
     return "\n".join(lines) + "\n"
 
 
-def main():
-    out_path = "queries.pq"
+def build_preamble(target: str) -> str:
+    settings = SETTINGS_LOCAL if target == "local" else SETTINGS_SHAREPOINT
+    plumbing = PLUMBING_LOCAL if target == "local" else PLUMBING_SHAREPOINT
     relevant_items_m_list = "{" + ", ".join(f'"{item}"' for item in ITEMS) + "}"
-    preamble = PREAMBLE.replace("__RELEVANT_ITEMS_LIST__", relevant_items_m_list)
-    content = preamble + "\n" + build_queries_block()
+    preamble = HEADER + settings + PLUMBING_HEADER + plumbing + REST
+    return preamble.replace("__RELEVANT_ITEMS_LIST__", relevant_items_m_list)
+
+
+def write_target(target: str, out_path: str):
+    content = build_preamble(target) + "\n" + build_queries_block()
     with open(out_path, "w") as f:
         f.write(content)
     n_programme_queries = len(PROGRAMMES) * len(ITEMS)
     n_school_queries = len(ITEMS)
-    print(f"Wrote {out_path}: {n_programme_queries} per-programme queries + {n_school_queries} school-wide queries "
-          f"({n_programme_queries + n_school_queries + 7} shared bindings total).")
+    n_shared = content.count("\nshared ")
+    print(f"Wrote {out_path} ({target}): {n_programme_queries} per-programme item queries + "
+          f"{n_school_queries} school-wide queries ({n_shared} shared bindings total).")
+
+
+def main():
+    write_target("local", "queries.pq")
+    write_target("sharepoint", "queries.sharepoint.pq")
 
 
 if __name__ == "__main__":
