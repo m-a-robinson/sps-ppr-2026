@@ -61,25 +61,53 @@ connects out.
 
 ## Loading this into Excel
 
-1. Open one of the 7 workbooks locally (a clone/pull of this repo).
-2. Set `SourceFolder` above to the local folder that clone lives in.
-3. **Data → Get Data → Launch Power Query Editor.**
-4. **Home → New Source → Blank Query**, then **Home → Advanced Editor**.
-5. Delete the placeholder text and paste in the entire contents of
-   `queries.pq`, then **Done**. Power Query reads a full `section` block
-   and creates one query per `shared` binding — you'll see all 46 appear
-   in the Queries pane at once, not just the blank query you started from.
-6. `SourceTables`, `SourceTablesParsed`, `ModuleRegister`, `RegisterBlocks`
-   and `GetWorkbookFiles`/`GetRegisterFileContent` are building blocks —
-   right-click each and set **"Enable load"** off (they don't need their
-   own sheet). The 35 `<ProgCode>_<Item>` / `All_<Item>` queries are the
-   ones worth loading, one per Phase 3 DASHBOARD view.
+**`queries.pq` is not something you paste in one go.** It's a whole
+Power Query `section` document — many `shared` bindings together — and a
+single Blank Query's Advanced Editor only ever accepts *one expression*.
+Pasting the full file there fails immediately with `Token Literal
+expected` at the first `shared` it hits, no further than the file's own
+opening comment block. (Confirmed against real Excel, not a theoretical
+concern — this is exactly what happens if you try it.) Each query has to
+be created individually:
 
-If you'd rather have `SourceFolder` as a proper Power Query *Parameter*
-(the dialog-box kind, under Home → Manage Parameters) instead of a plain
-query, that's a cosmetic swap you can make in the Excel UI afterwards —
-functionally identical, since every other query just references it by
-name either way.
+1. Open one of the 7 workbooks locally (a clone/pull of this repo).
+2. **Data → Get Data → Launch Power Query Editor.**
+3. Create `SourceFolder`, `UseSharePoint`, `SharePointSiteRoot` via
+   **Home → Manage Parameters → New** (Text/Logical/Text) rather than as
+   plain queries — the dialog is less error-prone than pasting a literal
+   into Advanced Editor (a stray leading/trailing space or tab in a pasted
+   URL is invisible there and will bite later; the parameter dialog
+   trims it). Set `SourceFolder` to wherever this clone lives locally.
+4. For every other query in `queries.pq`: **Home → New Source → Blank
+   Query → Home → Advanced Editor**, paste in **only that query's
+   right-hand side** (everything after its `=`, without the leading
+   `shared Name =` and without the trailing `;`), **Done**, then rename
+   the query to match (Query Settings pane, right side, or double-click
+   it in the Queries pane). Build in the order the file lists them —
+   each one after `fnItemTable` references something built before it, so
+   working top-to-bottom avoids "name not found" errors for something
+   you haven't created yet.
+5. You don't have to build every query in the file — only the
+   foundation (everything above section 6, "GENERATED QUERIES") plus
+   whichever `<ProgCode>_<Item>` / `_Wide` / `_ModuleOverview` /
+   `_SkillsCoverage` queries you actually want a sheet for right now.
+6. Foundation queries you build only feed others, not a worksheet —
+   right-click each and set **"Enable load"** off once it's working
+   (`GetWorkbookFiles`, `GetRegisterFileContent`, `SourceTables`,
+   `fnParseTableName`, `RelevantItems`, `SourceTablesParsed`,
+   `RegisterBlocks`, `ModuleRegister`, `fnItemTable`, `fnPivotKeyValue`,
+   `fnModuleOverview`, `GraduateSkillsCatalogue`, `fnSkillsCoverage`).
+
+**Replicating this to the other 5 workbooks**, once one workbook's set is
+working: rather than repeating 40+ manual pastes per workbook, use
+Power Query Editor's own **Home → Manage → Export Template** (packages
+every current query into one `.pqt` file) and, in the next workbook,
+**Get Data → From File → From Power Query Template** to import all of
+them in one step. You'll still need to rename the per-programme queries
+and swap the programme string inside each `fnItemTable(...)` /
+`fnSkillsCoverage(...)` call (`"Football Science"` → `"Physical
+Education"`, etc.) — but that's editing existing queries, not rebuilding
+~40 of them from a blank editor each time.
 
 ## Known data point to tidy up
 
