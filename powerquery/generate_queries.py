@@ -209,9 +209,10 @@ shared GetRegisterFileContent =
             Text.Trim(Text.Lower(name)) = "modules by programme.xlsx",
 
         AllFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
-        Match = Table.SelectRows(AllFiles, each IsRegisterFile([Name]))
+        Match = Table.SelectRows(AllFiles, each IsRegisterFile([Name])),
+        Result = Match{0}[Content]
     in
-        Match{0}[Content];
+        Result;
 
 '''
 
