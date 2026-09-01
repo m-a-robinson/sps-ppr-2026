@@ -1,10 +1,22 @@
 """
-Generates powerquery/queries.pq from the templates below.
+Generates powerquery/queries.pq (local desktop-Excel testing) and
+powerquery/queries.sharepoint.pq (Excel Online / live SharePoint —
+no local-filesystem access at all) from the shared templates below.
+
+Why two files: Excel for the web's Power Query engine doesn't support
+Folder.Files (local filesystem access) *at all* — merely having it
+appear anywhere in the query graph, even in a branch an `if` would never
+take at runtime, is enough for the whole refresh to be refused. queries.pq
+keeps the local/SharePoint toggle for testing changes against a git clone
+before they go live; queries.sharepoint.pq has no local branch, no
+SourceFolder, no UseSharePoint — just SharePoint.Files, safe to open from
+a browser as well as desktop Excel.
 
 Why generated rather than hand-written: the per-programme, per-item queries
-(Phase 2) are ~60 near-identical one-liners (6 programmes x 10 items, plus
-10 school-wide unions). Hand-typing that many is where copy-paste typos
-live. Re-run this script if the programme list or item list changes:
+(Phase 2) are ~30 near-identical one-liners (6 programmes x 5 items, plus
+5 school-wide unions), plus the Phase 3 dashboard-view queries per
+programme. Hand-typing that many is where copy-paste typos live.
+Re-run this script if the programme list or item list changes:
 
     python3 generate_queries.py
 """
@@ -26,7 +38,15 @@ PROGRAMMES = [
 # still supports any item suffix; add one back here if that changes.
 ITEMS = ["Meta", "LO", "Assess", "Hours", "Mapping"]
 
-PREAMBLE = r'''section Section1;
+# Items that come out of fnItemTable long/key-value (one row per module
+# field, not per module) -> (key column, value column) to pivot on. A
+# "<ProgCode>_<Item>_Wide" query is generated for each, one row per module.
+KEY_VALUE_ITEMS = {
+    "Meta": ("Module Data", "Details"),
+    "Hours": ("Component", "Contact Hours"),
+}
+
+HEADER = r'''section Section1;
 
 // =====================================================================
 // SPS Revalidation — module mapping queries
@@ -34,11 +54,13 @@ PREAMBLE = r'''section Section1;
 // =====================================================================
 //
 // Layout:
-//   1. Settings          — the one thing you edit per machine
+//   1. Settings          — what you edit per machine / per deployment
 //   2. Source plumbing    — reads every workbook once, in one place
 //   3. Module register    — reshapes "Modules by programme.xlsx" as-is
 //   4. fnItemTable         — the one function every query below calls
-//   5. Generated queries   — one per (programme x item), plus school-wide
+//   5. Wide views          — Meta/Hours reshaped to one row per module
+//   6. Graduate skills coverage
+//   7. Generated queries   — one per (programme x item), plus school-wide
 //
 // Design notes:
 //   - "Single home" for shared modules needs no bookkeeping: SourceTables
@@ -65,9 +87,8 @@ PREAMBLE = r'''section Section1;
 //     from that programme's own workbook when one exists there, and only
 //     falling back to another workbook when it doesn't — see step 4.
 //   - Meta/Hours (key-value) are deliberately left in their raw per-record
-//     shape here. Pivoting them into one row per module is a Phase 3
-//     (DASHBOARD view) concern layered on top of these queries — not
-//     done here, so these stay simple, provable building blocks.
+//     shape in step 4. Pivoting them into one row per module is step 5,
+//     layered on top rather than mixed into the raw extraction.
 //   - Only Meta, LO, Assess, Hours and Mapping are generated below — the
 //     5 items relevant to assessment/LO/hours mapping. Weekly, Aims,
 //     Syllabus, Overview and Notes are narrative/descriptive content, not
@@ -75,11 +96,19 @@ PREAMBLE = r'''section Section1;
 //     still supports any item suffix if that changes).
 
 // ---------------------------------------------------------------------
-// 1. SETTINGS — edit these two lines for your machine, nothing else
+// 1. SETTINGS
 // ---------------------------------------------------------------------
 
-// Local folder containing the 7 xlsx files (this repo, cloned locally).
-// Used while the project develops against the GitHub repo, not SharePoint.
+'''
+
+SETTINGS_LOCAL = r'''// Local folder containing the 7 xlsx files (this repo, cloned locally).
+// Desktop Excel only. Folder.Files (used below) is not supported by
+// Excel for the web's Power Query engine AT ALL -- just having it appear
+// in the query graph, even inside a branch UseSharePoint would skip at
+// runtime, is enough for a browser refresh to be refused outright. If
+// this workbook might ever be opened in Excel Online (or you're seeing
+// exactly that refusal against a live SharePoint site), use
+// queries.sharepoint.pq instead -- it has no local branch at all.
 shared SourceFolder = "C:\Users\YourName\sps-ppr-2026";
 
 // Flip to `true` only when ready to point at the live SharePoint site
@@ -89,11 +118,24 @@ shared UseSharePoint = false;
 // Kept for when UseSharePoint flips to true — not used while false.
 shared SharePointSiteRoot = "https://ljmu.sharepoint.com/teams/SPSRe-validation2026Team";
 
-// ---------------------------------------------------------------------
+'''
+
+SETTINGS_SHAREPOINT = r'''// No local-folder option here, on purpose: this file is for wherever the
+// workbook might actually be opened, including Excel for the web, which
+// doesn't support Folder.Files (local filesystem access) at all -- not
+// even inside an unused branch of an if. For local desktop-only testing
+// against a git clone of this repo, use queries.pq instead.
+shared SharePointSiteRoot = "https://ljmu.sharepoint.com/teams/SPSRe-validation2026Team";
+
+'''
+
+PLUMBING_HEADER = r'''// ---------------------------------------------------------------------
 // 2. SOURCE PLUMBING — every workbook is read exactly once
 // ---------------------------------------------------------------------
 
-shared GetWorkbookFiles =
+'''
+
+PLUMBING_LOCAL = r'''shared GetWorkbookFiles =
     let
         LocalSource = Folder.Files(SourceFolder),
         LocalWorkbooks = Table.SelectRows(LocalSource, each
@@ -123,18 +165,57 @@ shared GetWorkbookFiles =
 shared GetRegisterFileContent =
     let
         LocalFiles = Folder.Files(SourceFolder),
-        LocalMatch = Table.SelectRows(LocalFiles, each [Name] = "Modules by programme.xlsx"),
+        // Case/whitespace-insensitive: an exact match here is fragile the
+        // moment this file gets re-uploaded to SharePoint under a slightly
+        // different name (trailing space, different capitalisation) --
+        // and a silent zero-row match fails downstream as an unhelpful
+        // "not enough elements" error, not something that points at this.
+        IsRegisterFile = (name as text) as logical =>
+            Text.Trim(Text.Lower(name)) = "modules by programme.xlsx",
+
+        LocalMatch = Table.SelectRows(LocalFiles, each IsRegisterFile([Name])),
         LocalRegister = LocalMatch{0}[Content],
 
         SharePointFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
-        SharePointMatch = Table.SelectRows(SharePointFiles, each [Name] = "Modules by programme.xlsx"),
+        SharePointMatch = Table.SelectRows(SharePointFiles, each IsRegisterFile([Name])),
         SharePointRegister = SharePointMatch{0}[Content],
 
         Result = if UseSharePoint then SharePointRegister else LocalRegister
     in
         Result;
 
-// Every named Excel Table, from every workbook, in one pooled list.
+'''
+
+PLUMBING_SHAREPOINT = r'''shared GetWorkbookFiles =
+    let
+        AllFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
+        ExcelFiles = Table.SelectRows(AllFiles, each
+            Text.EndsWith([Name], ".xlsx") or Text.EndsWith([Name], ".xlsm")
+        ),
+        Workbooks = Table.SelectRows(ExcelFiles, each
+            Text.Contains([Name], "AllModuleProformas")
+        )
+    in
+        Workbooks;
+
+shared GetRegisterFileContent =
+    let
+        // Case/whitespace-insensitive: an exact match here is fragile the
+        // moment this file gets re-uploaded to SharePoint under a slightly
+        // different name (trailing space, different capitalisation) --
+        // and a silent zero-row match fails downstream as an unhelpful
+        // "not enough elements" error, not something that points at this.
+        IsRegisterFile = (name as text) as logical =>
+            Text.Trim(Text.Lower(name)) = "modules by programme.xlsx",
+
+        AllFiles = SharePoint.Files(SharePointSiteRoot, [ApiVersion = 15]),
+        Match = Table.SelectRows(AllFiles, each IsRegisterFile([Name]))
+    in
+        Match{0}[Content];
+
+'''
+
+REST = r'''// Every named Excel Table, from every workbook, in one pooled list.
 // This — not any per-query source read — is what makes the "single
 // home, many programmes" principle work without extra bookkeeping.
 //
@@ -323,9 +404,98 @@ shared fnItemTable = (programmeFilter as nullable text, itemSuffix as text) as t
         FilteredBlankRows;
 
 // ---------------------------------------------------------------------
-// 5. GENERATED QUERIES — one per (programme x item), plus school-wide
+// 5. WIDE VIEWS — Meta/Hours reshaped to one row per module
 // ---------------------------------------------------------------------
-'''.lstrip("\n")
+//
+// FS_Meta and FS_Hours (etc.) come out of fnItemTable long/key-value —
+// one row per (module, field), not one row per module — because that's
+// their table's actual shape, and Phase 2 deliberately doesn't reshape.
+// This is that reshape, factored out the same way fnItemTable is: one
+// function, called once per programme for each of the two key-value
+// items, rather than duplicating a pivot step 6+ times.
+
+shared fnPivotKeyValue = (baseTable as table, keyColumn as text, valueColumn as text) as table =>
+    let
+        PivotValues = List.Distinct(Table.Column(baseTable, keyColumn)),
+        Pivoted = Table.Pivot(baseTable, PivotValues, keyColumn, valueColumn, each List.First(_, null))
+    in
+        Pivoted;
+
+// The dashboard's summary table: one row per module. Keeps only the
+// columns actually worth showing — drops the join plumbing (SourceWorkbook,
+// TableName, ItemSuffix, Programme, ProgCode: all constant once you're
+// looking at one programme's own dashboard) and the pivot's duplicate
+// columns ("Module Code"/"Module Title"/"Programme(s)" repeat ModuleCode/
+// ModuleTitle/Programme under their raw Meta-field names). Adds "Hours per
+// Credit" as a cheap outlier check — no external benchmark needed, just
+// something to sort by and eyeball for modules that look wrong relative to
+// the rest of the cohort. MissingField.UseNull guards Table.SelectColumns
+// against a programme whose Hours data turns out not to have a "Total" row
+// for every module — untested school-wide, so fail soft here rather than
+// error, for a first concept pass.
+shared fnModuleOverview = (metaWide as table, hoursWide as table) as table =>
+    let
+        HoursTotal = Table.SelectColumns(hoursWide, {"ModuleCode", "Total"}, MissingField.UseNull),
+        Merged = Table.NestedJoin(metaWide, {"ModuleCode"}, HoursTotal, {"ModuleCode"}, "HoursData", JoinKind.LeftOuter),
+        Expanded = Table.ExpandTableColumn(Merged, "HoursData", {"Total"}, {"Total Contact Hours"}),
+        Selected = Table.SelectColumns(Expanded, {
+            "ModuleCode", "ModuleTitle", "Level", "Semester", "Credits",
+            "Module Leader", "Module Type", "Total Contact Hours"
+        }),
+        Typed = Table.TransformColumnTypes(Selected, {
+            {"Credits", Int64.Type}, {"Level", Int64.Type}, {"Semester", Int64.Type},
+            {"Total Contact Hours", Int64.Type}
+        }),
+        AddRatio = Table.AddColumn(Typed, "Hours per Credit", each
+            if [Credits] = null or [Credits] = 0 or [Total Contact Hours] = null then null
+            else Number.Round([Total Contact Hours] / [Credits], 2), Double.Type)
+    in
+        AddRatio;
+
+// ---------------------------------------------------------------------
+// 6. GRADUATE SKILLS COVERAGE
+// ---------------------------------------------------------------------
+//
+// Each workbook's LISTS sheet has a "LISTS_Table" (Category, Skill) that
+// every module's _Mapping table draws its dropdown values from — the
+// master catalogue of graduate skills the school actually tracks.
+// FS_Mapping alone can only show what IS covered; checking what's NOT
+// needs this catalogue to compare against. Pulled from SourceTables (not
+// SourceTablesParsed, which already filtered LISTS_Table out — its
+// parsed ItemSuffix is "Table", not one of the 5 relevant items) and
+// unioned across all 6 workbooks rather than trusting just one copy, in
+// case they've drifted from each other.
+shared GraduateSkillsCatalogue =
+    let
+        Matches = Table.SelectRows(SourceTables, each [TableName] = "LISTS_Table"),
+        Expanded = Table.ExpandTableColumn(Matches, "TableData", {"Category", "Skill"}),
+        Distinct = Table.Distinct(Table.SelectColumns(Expanded, {"Category", "Skill"}))
+    in
+        Distinct;
+
+// For a programme's _Mapping table: every catalogue (Category, Skill),
+// whether it's covered anywhere in that programme, by how many modules,
+// and which ones — so a gap reads as Covered = FALSE, not just an
+// absence you'd have to notice yourself.
+shared fnSkillsCoverage = (mappingTable as table) as table =>
+    let
+        UsedDetail = Table.SelectColumns(mappingTable, {"ModuleCode", "ModuleTitle", "Graduate Skills Category", "Graduate Skill"}),
+        RenamedDetail = Table.RenameColumns(UsedDetail, {{"Graduate Skills Category", "Category"}, {"Graduate Skill", "Skill"}}),
+        Grouped = Table.Group(RenamedDetail, {"Category", "Skill"}, {
+            {"Modules Covering", each Text.Combine(List.Distinct(List.RemoveNulls([ModuleTitle])), "; "), type text},
+            {"Module Count", each List.Count(List.Distinct(List.RemoveNulls([ModuleCode]))), Int64.Type}
+        }),
+        Merged = Table.NestedJoin(GraduateSkillsCatalogue, {"Category", "Skill"}, Grouped, {"Category", "Skill"}, "Match", JoinKind.LeftOuter),
+        Expanded = Table.ExpandTableColumn(Merged, "Match", {"Modules Covering", "Module Count"}, {"Modules Covering", "Module Count"}),
+        FillCount = Table.ReplaceValue(Expanded, null, 0, Replacer.ReplaceValue, {"Module Count"}),
+        AddCovered = Table.AddColumn(FillCount, "Covered", each [Module Count] > 0, type logical)
+    in
+        AddCovered;
+
+// ---------------------------------------------------------------------
+// 7. GENERATED QUERIES — one per (programme x item), plus school-wide
+// ---------------------------------------------------------------------
+'''
 
 
 def build_queries_block() -> str:
@@ -335,6 +505,13 @@ def build_queries_block() -> str:
         lines.append(f"// {programme}")
         for item in ITEMS:
             lines.append(f'shared {code}_{item} = fnItemTable("{programme}", "{item}");')
+        for item, (key_col, value_col) in KEY_VALUE_ITEMS.items():
+            if item in ITEMS:
+                lines.append(f'shared {code}_{item}_Wide = fnPivotKeyValue({code}_{item}, "{key_col}", "{value_col}");')
+        if "Meta" in ITEMS and "Hours" in ITEMS:
+            lines.append(f'shared {code}_ModuleOverview = fnModuleOverview({code}_Meta_Wide, {code}_Hours_Wide);')
+        if "Mapping" in ITEMS:
+            lines.append(f'shared {code}_SkillsCoverage = fnSkillsCoverage({code}_Mapping);')
         lines.append("")
 
     lines.append("// --- school-wide (all programmes, unfiltered) ---------------------------\n")
@@ -344,17 +521,28 @@ def build_queries_block() -> str:
     return "\n".join(lines) + "\n"
 
 
-def main():
-    out_path = "queries.pq"
+def build_preamble(target: str) -> str:
+    settings = SETTINGS_LOCAL if target == "local" else SETTINGS_SHAREPOINT
+    plumbing = PLUMBING_LOCAL if target == "local" else PLUMBING_SHAREPOINT
     relevant_items_m_list = "{" + ", ".join(f'"{item}"' for item in ITEMS) + "}"
-    preamble = PREAMBLE.replace("__RELEVANT_ITEMS_LIST__", relevant_items_m_list)
-    content = preamble + "\n" + build_queries_block()
+    preamble = HEADER + settings + PLUMBING_HEADER + plumbing + REST
+    return preamble.replace("__RELEVANT_ITEMS_LIST__", relevant_items_m_list)
+
+
+def write_target(target: str, out_path: str):
+    content = build_preamble(target) + "\n" + build_queries_block()
     with open(out_path, "w") as f:
         f.write(content)
     n_programme_queries = len(PROGRAMMES) * len(ITEMS)
     n_school_queries = len(ITEMS)
-    print(f"Wrote {out_path}: {n_programme_queries} per-programme queries + {n_school_queries} school-wide queries "
-          f"({n_programme_queries + n_school_queries + 7} shared bindings total).")
+    n_shared = content.count("\nshared ")
+    print(f"Wrote {out_path} ({target}): {n_programme_queries} per-programme item queries + "
+          f"{n_school_queries} school-wide queries ({n_shared} shared bindings total).")
+
+
+def main():
+    write_target("local", "queries.pq")
+    write_target("sharepoint", "queries.sharepoint.pq")
 
 
 if __name__ == "__main__":
