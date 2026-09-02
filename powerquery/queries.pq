@@ -327,25 +327,31 @@ shared fnPivotKeyValue = (baseTable as table, keyColumn as text, valueColumn as 
     in
         Pivoted;
 
-// The dashboard's summary table: one row per module. Keeps only the
-// columns actually worth showing — drops the join plumbing (SourceWorkbook,
-// TableName, ItemSuffix, Programme, ProgCode: all constant once you're
-// looking at one programme's own dashboard) and the pivot's duplicate
-// columns ("Module Code"/"Module Title"/"Programme(s)" repeat ModuleCode/
-// ModuleTitle/Programme under their raw Meta-field names). Adds "Hours per
-// Credit" as a cheap outlier check — no external benchmark needed, just
-// something to sort by and eyeball for modules that look wrong relative to
-// the rest of the cohort. MissingField.UseNull guards Table.SelectColumns
-// against a programme whose Hours data turns out not to have a "Total" row
-// for every module — untested school-wide, so fail soft here rather than
-// error, for a first concept pass.
+// The dashboard's summary table: one row per (Programme, ModuleCode).
+// Keeps only the columns actually worth showing — drops the join plumbing
+// (SourceWorkbook, TableName, ItemSuffix, ProgCode) and the pivot's
+// duplicate columns ("Module Code"/"Module Title"/"Programme(s)" repeat
+// ModuleCode/ModuleTitle/Programme under their raw Meta-field names).
+// Adds "Hours per Credit" as a cheap outlier check — no external benchmark
+// needed, just something to sort by and eyeball for modules that look
+// wrong relative to the rest of the cohort. MissingField.UseNull guards
+// Table.SelectColumns against a programme whose Hours data turns out not
+// to have a "Total" row for every module.
+//
+// Joins on {ModuleCode, Programme}, not ModuleCode alone: fine for a
+// single-programme call (FS_Meta_Wide/FS_Hours_Wide, where Programme is
+// constant) but load-bearing for the school-wide one (All_Meta_Wide/
+// All_Hours_Wide) — a shared module like 4093SPS has one row per
+// programme that claims it, and joining on ModuleCode alone would match
+// every one of those Meta rows against every one of those Hours rows
+// regardless of which programme each belongs to.
 shared fnModuleOverview = (metaWide as table, hoursWide as table) as table =>
     let
-        HoursTotal = Table.SelectColumns(hoursWide, {"ModuleCode", "Total"}, MissingField.UseNull),
-        Merged = Table.NestedJoin(metaWide, {"ModuleCode"}, HoursTotal, {"ModuleCode"}, "HoursData", JoinKind.LeftOuter),
+        HoursTotal = Table.SelectColumns(hoursWide, {"ModuleCode", "Programme", "Total"}, MissingField.UseNull),
+        Merged = Table.NestedJoin(metaWide, {"ModuleCode", "Programme"}, HoursTotal, {"ModuleCode", "Programme"}, "HoursData", JoinKind.LeftOuter),
         Expanded = Table.ExpandTableColumn(Merged, "HoursData", {"Total"}, {"Total Contact Hours"}),
         Selected = Table.SelectColumns(Expanded, {
-            "ModuleCode", "ModuleTitle", "Level", "Semester", "Credits",
+            "Programme", "ModuleCode", "ModuleTitle", "Level", "Semester", "Credits",
             "Module Leader", "Module Type", "Total Contact Hours"
         }),
         Typed = Table.TransformColumnTypes(Selected, {
@@ -379,19 +385,34 @@ shared GraduateSkillsCatalogue =
     in
         Distinct;
 
-// For a programme's _Mapping table: every catalogue (Category, Skill),
-// whether it's covered anywhere in that programme, by how many modules,
-// and which ones — so a gap reads as Covered = FALSE, not just an
-// absence you'd have to notice yourself.
+// Every (Programme, Category, Skill) the catalogue defines, whether it's
+// covered by that programme, by how many of that programme's modules,
+// and which ones — so a gap reads as Covered = FALSE for that specific
+// programme, not just an absence you'd have to notice yourself.
+//
+// The programme list is read off mappingTable itself (List.Distinct on
+// its own Programme column), so the same function works unchanged for a
+// single-programme call (FS_Mapping -> one programme) and the
+// school-wide one (All_Mapping -> all 6) — the row this generalises
+// from a plain group-by is the cross join of catalogue x programmes
+// below: without it, a programme with ZERO modules touching a given
+// skill would have no row for that skill at all (silently missing, not
+// a visible Covered = FALSE), because there'd be nothing in
+// mappingTable to group in the first place.
 shared fnSkillsCoverage = (mappingTable as table) as table =>
     let
-        UsedDetail = Table.SelectColumns(mappingTable, {"ModuleCode", "ModuleTitle", "Graduate Skills Category", "Graduate Skill"}),
+        Programmes = List.Distinct(Table.Column(mappingTable, "Programme")),
+        ProgrammeTable = Table.FromList(Programmes, Splitter.SplitByNothing(), {"Programme"}),
+        CatalogueByProgramme = Table.AddColumn(ProgrammeTable, "Skills", each GraduateSkillsCatalogue),
+        AllProgrammeSkills = Table.ExpandTableColumn(CatalogueByProgramme, "Skills", {"Category", "Skill"}, {"Category", "Skill"}),
+
+        UsedDetail = Table.SelectColumns(mappingTable, {"Programme", "ModuleCode", "ModuleTitle", "Graduate Skills Category", "Graduate Skill"}),
         RenamedDetail = Table.RenameColumns(UsedDetail, {{"Graduate Skills Category", "Category"}, {"Graduate Skill", "Skill"}}),
-        Grouped = Table.Group(RenamedDetail, {"Category", "Skill"}, {
+        Grouped = Table.Group(RenamedDetail, {"Programme", "Category", "Skill"}, {
             {"Modules Covering", each Text.Combine(List.Distinct(List.RemoveNulls([ModuleTitle])), "; "), type text},
             {"Module Count", each List.Count(List.Distinct(List.RemoveNulls([ModuleCode]))), Int64.Type}
         }),
-        Merged = Table.NestedJoin(GraduateSkillsCatalogue, {"Category", "Skill"}, Grouped, {"Category", "Skill"}, "Match", JoinKind.LeftOuter),
+        Merged = Table.NestedJoin(AllProgrammeSkills, {"Programme", "Category", "Skill"}, Grouped, {"Programme", "Category", "Skill"}, "Match", JoinKind.LeftOuter),
         Expanded = Table.ExpandTableColumn(Merged, "Match", {"Modules Covering", "Module Count"}, {"Modules Covering", "Module Count"}),
         FillCount = Table.ReplaceValue(Expanded, null, 0, Replacer.ReplaceValue, {"Module Count"}),
         AddCovered = Table.AddColumn(FillCount, "Covered", each [Module Count] > 0, type logical)
@@ -477,3 +498,7 @@ shared All_LO = fnItemTable(null, "LO");
 shared All_Assess = fnItemTable(null, "Assess");
 shared All_Hours = fnItemTable(null, "Hours");
 shared All_Mapping = fnItemTable(null, "Mapping");
+shared All_Meta_Wide = fnPivotKeyValue(All_Meta, "Module Data", "Details");
+shared All_Hours_Wide = fnPivotKeyValue(All_Hours, "Component", "Contact Hours");
+shared All_ModuleOverview = fnModuleOverview(All_Meta_Wide, All_Hours_Wide);
+shared All_SkillsCoverage = fnSkillsCoverage(All_Mapping);
