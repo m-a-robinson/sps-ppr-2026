@@ -415,10 +415,18 @@ shared fnItemTable = (programmeFilter as nullable text, itemSuffix as text) as t
 // function, called once per programme for each of the two key-value
 // items, rather than duplicating a pivot step 6+ times.
 
+// Table.Pivot turns each distinct keyColumn value into a new column
+// NAME, which has to be text — a blank/null "Module Data" (or
+// "Component") label in even one source row fails the whole pivot with
+// "We cannot convert the value null to type Text", since Table.Pivot
+// can't name a column null. KeyedRows drops any row missing its own key
+// before pivoting: there's no field name to attach that row's value to
+// anyway, so nothing meaningful is lost by excluding it.
 shared fnPivotKeyValue = (baseTable as table, keyColumn as text, valueColumn as text) as table =>
     let
-        PivotValues = List.Distinct(Table.Column(baseTable, keyColumn)),
-        Pivoted = Table.Pivot(baseTable, PivotValues, keyColumn, valueColumn, each List.First(_, null))
+        KeyedRows = Table.SelectRows(baseTable, each Record.Field(_, keyColumn) <> null),
+        PivotValues = List.Distinct(Table.Column(KeyedRows, keyColumn)),
+        Pivoted = Table.Pivot(KeyedRows, PivotValues, keyColumn, valueColumn, each List.First(_, null))
     in
         Pivoted;
 
