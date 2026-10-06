@@ -31,6 +31,7 @@ interface Rename {
   sheet: ExcelScript.Worksheet;
   sheetName: string;
   table: ExcelScript.Table;
+  id: string;
   from: string;
   to: string;
   temp: string;
@@ -73,11 +74,15 @@ function main(workbook: ExcelScript.Workbook) {
       }
       if (item === "Meta") checkMetaCode(table, sheetName, notes);
       const target = `_${sheetName}_${item}`;
-      if (name === target) {
+      const id = table.getId();
+      // Already correct if Excel resolves the target name to this same table
+      // (these workbooks also hold an internal name without the underscore).
+      const holder = name === target ? table : workbook.getTable(target);
+      if (holder && holder.getId() === id) {
         correct++;
         continue;
       }
-      plan.push({ sheet, sheetName, table, from: name, to: target, temp: "" });
+      plan.push({ sheet, sheetName, table, id, from: name, to: target, temp: "" });
     }
   }
 
@@ -160,6 +165,11 @@ function main(workbook: ExcelScript.Workbook) {
   } finally {
     reprotect();
   }
+
+  plan.forEach((p) => {
+    const table = workbook.getTable(p.to);
+    if (!table || table.getId() !== p.id) console.log(`CHECK: "${p.to}" on ${p.sheetName} didn't take. Rename it by hand.`);
+  });
 
   console.log(`Done: ${plan.length} tables renamed, ${correct} already matched. ${unprotected.length} sheet(s) were unprotected and protected again.`);
 }

@@ -11,6 +11,10 @@ Option Explicit
 ' Tables already named correctly are left alone, and no rename is made if the
 ' new name already exists in the workbook. Protected sheets are unprotected
 ' for the rename and protected again with their original settings.
+'
+' Names are read from DisplayName (the name shown in Excel and used in
+' formulas). These workbooks also store a second, internal Name without the
+' leading underscore (e.g. 4301SPS_Meta), which is ignored when checking.
 
 Private Const DRY_RUN As Boolean = True
 Private Const SHEET_PASSWORD As String = ""   ' sheet protection password, if any
@@ -18,8 +22,8 @@ Private Const SHEET_PASSWORD As String = ""   ' sheet protection password, if an
 Public Sub FixTableNames()
     Dim wb As Workbook, ws As Worksheet, lo As ListObject, nm As Name
     Dim taken As Object, leaving As Object, claimed As Object, prot As Object, toChange As Object
-    Dim notes As New Collection, plan As New Collection, temps As New Collection
-    Dim items As Variant, p As Variant, sh As Variant, msg As Variant
+    Dim notes As New Collection, plan As New Collection
+    Dim items As Variant, p As Variant, sh As Variant, msg As Variant, tbl As ListObject
     Dim sheetName As String, nameNow As String, body As String, suffix As String
     Dim itm As String, target As String, key As String, tempName As String
     Dim report As String, failed As String, errText As String
@@ -28,11 +32,12 @@ Public Sub FixTableNames()
     Set wb = ActiveWorkbook
     items = Array("Meta", "LO", "Assess", "Weekly", "Hours", "Mapping", "Aims", "Syllabus", "Overview", "Notes")
 
-    ' Every name already in use: table names and workbook-level defined names.
+    ' Every name already in use: both names of every table, and workbook-level defined names.
     Set taken = CreateObject("Scripting.Dictionary")
     taken.CompareMode = vbTextCompare
     For Each ws In wb.Worksheets
         For Each lo In ws.ListObjects
+            taken(lo.DisplayName) = True
             taken(lo.Name) = True
         Next lo
     Next ws
@@ -49,7 +54,7 @@ Public Sub FixTableNames()
             End If
         Else
             For Each lo In ws.ListObjects
-                nameNow = lo.Name
+                nameNow = lo.DisplayName
                 body = nameNow
                 If Left$(body, 1) = "_" Then body = Mid$(body, 2)
                 cut = InStrRev(body, "_")
@@ -74,7 +79,7 @@ Public Sub FixTableNames()
                     If StrComp(nameNow, target, vbBinaryCompare) = 0 Then
                         correct = correct + 1
                     Else
-                        plan.Add Array(sheetName, nameNow, target)
+                        plan.Add Array(sheetName, nameNow, target, lo)
                     End If
                 End If
             Next lo
@@ -163,13 +168,14 @@ Public Sub FixTableNames()
         Do While taken.Exists(tempName)
             tempName = tempName & "X"
         Loop
-        wb.Worksheets(p(0)).ListObjects(p(1)).Name = tempName
-        temps.Add tempName
+        Set tbl = p(3)
+        RenameTable tbl, tempName
     Next i
     ' Step 2: final names.
     For i = 1 To plan.Count
         p = plan(i)
-        wb.Worksheets(p(0)).ListObjects(temps(i)).Name = p(2)
+        Set tbl = p(3)
+        RenameTable tbl, CStr(p(2))
     Next i
     On Error GoTo 0
 
@@ -184,6 +190,14 @@ RenameFailed:
     ReprotectAll wb, prot
     Finish report, "ERROR while renaming: " & errText & vbLf & _
                    "Sheets have been protected again. Run the dry run again: it will pick up any table left half-renamed."
+End Sub
+
+' Set the displayed name, and keep the internal name in step where Excel allows it.
+Private Sub RenameTable(ByVal lo As ListObject, ByVal newName As String)
+    lo.DisplayName = newName
+    On Error Resume Next
+    lo.Name = newName
+    On Error GoTo 0
 End Sub
 
 Private Function IsModuleSheet(ByVal s As String) As Boolean
