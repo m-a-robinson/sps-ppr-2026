@@ -1,58 +1,59 @@
 Attribute VB_Name = "modProtectModuleSheets"
 Option Explicit
 
-' Protects every module sheet (named like 4001SPS) in the ACTIVE workbook using the cells'
-' current Locked settings: locked cells (labels, fixed columns) can't be changed, unlocked
-' cells (the input columns) stay editable, and the dropdowns keep working.
-' UnprotectModuleSheets undoes it.
+' Protects every module sheet (named like 4001SPS) in the ACTIVE workbook so that:
+'   - every cell inside a table can be edited, and the dropdowns keep working;
+'   - everything outside the tables is locked.
+' Table header rows and formula cells (the Hours total) stay locked, because the queries read
+' the column headings by name and the total is calculated. Set LOCK_HEADERS or LOCK_FORMULAS
+' to False to make those editable too.
 '
-' Query output sheets (FS_Meta, SES_Mapping ...) are never protected, because a protected
-' sheet blocks Refresh. Sheets that are already protected are left exactly as they are.
-'
-' Before protecting, it lists input cells that are locked: a locked cell in a table column
-' that is otherwise mostly unlocked, usually left behind by pasting formats. Nobody can type
-' in those once the sheet is protected. Set UNLOCK_GAPS = True to unlock them first.
+' Query output sheets (FS_Meta, SES_Mapping ...) are never protected: protection blocks Refresh.
+' LISTS, the source of the dropdowns, is locked completely unless PROTECT_LISTS = False.
+' Sheets that are already protected are unprotected with SHEET_PASSWORD and protected again
+' with these settings. UnprotectModuleSheets undoes it.
 '
 ' Note: tables can't gain rows on a protected sheet. Unprotect first if a module needs more.
 
 Private Const SHEET_PASSWORD As String = ""    ' leave blank for no password
-Private Const PROTECT_LISTS As Boolean = True  ' also protect LISTS, the dropdown source lists
-Private Const UNLOCK_GAPS As Boolean = False   ' unlock the locked cells found in input columns
+Private Const PROTECT_LISTS As Boolean = True  ' also lock LISTS completely
+Private Const LOCK_HEADERS As Boolean = True   ' keep table header rows locked
+Private Const LOCK_FORMULAS As Boolean = True  ' keep formula cells (Hours total) locked
 
 Public Sub ProtectModuleSheets()
-    Dim ws As Worksheet, lo As ListObject, lc As ListColumn, c As Range
-    Dim gaps As String, sheetGaps As String, summary As String, shown As String
-    Dim nDone As Long, nAlready As Long, nGaps As Long, nUnlocked As Long
+    Dim ws As Worksheet, lo As ListObject, c As Range
+    Dim nDone As Long, nCells As Long, failed As String
 
+    Application.ScreenUpdating = False
     For Each ws In ActiveWorkbook.Worksheets
         If InScope(ws) Then
             If IsProtected(ws) Then
-                nAlready = nAlready + 1
+                On Error Resume Next
+                ws.Unprotect SHEET_PASSWORD
+                On Error GoTo 0
+            End If
+            If IsProtected(ws) Then
+                failed = failed & IIf(failed = "", "", ", ") & ws.Name
             Else
-                sheetGaps = ""
+                ' Lock everything, then open up the table cells.
+                ws.Cells.Locked = True
                 If IsModuleSheet(ws.Name) Then
                     For Each lo In ws.ListObjects
                         If Not lo.DataBodyRange Is Nothing Then
-                            For Each lc In lo.ListColumns
-                                nUnlocked = 0
-                                For Each c In lc.DataBodyRange.Cells
-                                    If Not c.Locked Then nUnlocked = nUnlocked + 1
+                            lo.DataBodyRange.Locked = False
+                            nCells = nCells + lo.DataBodyRange.Cells.Count
+                            If LOCK_FORMULAS Then
+                                For Each c In lo.DataBodyRange.Cells
+                                    If c.HasFormula Then
+                                        c.Locked = True
+                                        nCells = nCells - 1
+                                    End If
                                 Next c
-                                ' A mostly-unlocked column is an input column: report its locked cells.
-                                If nUnlocked > 0 And nUnlocked * 2 >= lc.DataBodyRange.Cells.Count Then
-                                    For Each c In lc.DataBodyRange.Cells
-                                        If c.Locked And Not c.HasFormula Then
-                                            sheetGaps = sheetGaps & " " & c.Address(False, False)
-                                            nGaps = nGaps + 1
-                                            If UNLOCK_GAPS Then c.Locked = False
-                                        End If
-                                    Next c
-                                End If
-                            Next lc
+                            End If
                         End If
+                        If Not LOCK_HEADERS And lo.ShowHeaders Then lo.HeaderRowRange.Locked = False
                     Next lo
                 End If
-                If sheetGaps <> "" Then gaps = gaps & ws.Name & ":" & sheetGaps & vbLf
 
                 ws.Protect Password:=SHEET_PASSWORD, DrawingObjects:=True, Contents:=True, Scenarios:=True, _
                     AllowFormattingCells:=True, AllowFormattingColumns:=True, AllowFormattingRows:=True, _
@@ -64,19 +65,11 @@ Public Sub ProtectModuleSheets()
             End If
         End If
     Next ws
+    Application.ScreenUpdating = True
 
-    summary = "Protected " & nDone & " sheet(s)" & _
-              IIf(nAlready > 0, "; " & nAlready & " were already protected and were left as they were", "") & "."
-    If nGaps > 0 Then
-        summary = summary & vbLf & vbLf & nGaps & " locked cell(s) in input columns " & _
-                  IIf(UNLOCK_GAPS, "were unlocked first:", "can't be edited now (set UNLOCK_GAPS = True and re-run after unprotecting to fix):")
-        Debug.Print summary
-        Debug.Print gaps
-        shown = gaps
-        If Len(shown) > 700 Then shown = Left$(shown, 700) & "..." & vbLf & "(full list in the Immediate window: Ctrl+G)"
-        summary = summary & vbLf & shown
-    End If
-    MsgBox summary, vbInformation, "Protect module sheets"
+    MsgBox "Protected " & nDone & " sheet(s): " & nCells & " table cells are editable, everything else is locked." & _
+           IIf(failed = "", "", vbLf & vbLf & "Couldn't unprotect " & failed & " to update it: put the password in SHEET_PASSWORD."), _
+           vbInformation, "Protect module sheets"
 End Sub
 
 Public Sub UnprotectModuleSheets()
